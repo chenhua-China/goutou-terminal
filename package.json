@@ -5,7 +5,7 @@
   "main": "main.js",
   "repository": {
     "type": "git",
-    "url": "https://github.com/YOUR_USERNAME/doghead-terminal-workspace.git"
+    "url": "https://github.com/chenhua-China/goutou-terminal.git"
   },
   "scripts": {
     "start": "electron .",
