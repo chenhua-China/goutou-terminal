@@ -3,11 +3,8 @@ node_modules/
 .npm/
 .yarn/
 
-# Build outputs (keep installer only)
-dist/*
-!dist/*.exe
-!dist/*.blockmap
-dist/win-unpacked/
+# Build outputs (ignore all, use GitHub Releases for installers)
+dist/
 build/
 out/
 release/
