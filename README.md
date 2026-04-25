@@ -1,4 +1,4 @@
-# 🐕 Doghead Terminal Workspace
+# 🐕 Goutou Terminal
 
 > A powerful terminal workspace built with Electron + xterm.js + node-pty. Manage multiple terminal sessions with aliases, templates, and auto-restore.
 
@@ -21,18 +21,24 @@
 - 💾 **Session Persistence** - Sessions saved and restored across app restarts
 - 🛡️ **Health Monitoring** - Terminal count, memory usage, and health status
 
+## 📥 Download
+
+Download the latest Windows installer from the `dist/` directory:
+
+- [Windows Installer (x64)](https://github.com/chenhua-China/goutou-terminal/raw/master/dist/goutou-terminal-setup-1.0.0.exe)
+
 ## 🚀 Quick Start
 
 ### Prerequisites
 
 - [Node.js](https://nodejs.org/) (v18+)
-- npm or yarn
+- npm
 
 ### Install & Run
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/doghead-terminal-workspace.git
-cd doghead-terminal-workspace
+git clone https://github.com/chenhua-China/goutou-terminal.git
+cd goutou-terminal
 npm install
 npm start
 ```
@@ -82,13 +88,15 @@ The installer will be generated in `dist/` directory.
 ## 📁 Project Structure
 
 ```
-terminal-workspace/
+goutou-terminal/
 ├── main.js              # Electron main process (PTY management)
 ├── renderer.js          # Frontend logic (UI, terminal management)
 ├── index.html           # Main HTML structure
 ├── styles.css           # VS Code-inspired dark theme
 ├── package.json         # Project configuration
-└── templates.json       # Default terminal templates
+├── templates.json       # Default terminal templates
+└── dist/                # Build output (installers)
+    └── goutou-terminal-setup-1.0.0.exe
 ```
 
 ## 🔧 Technical Details
@@ -113,22 +121,7 @@ terminal-workspace/
 ### Session Storage
 
 Sessions are stored in the Electron user data directory:
-- **Windows**: `%APPDATA%/doghead.terminal/session.json`
-
-## 🖼️ Screenshots
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│ 📋 Session List          │ 🖥️ 4/10                         │
-├───────────────────────────┤                                 │
-│ 🔧 Git Bash 1            │ Git Bash (Git Bash) 📁 D:\proj  │
-│ 💻 PowerShell 1          │                                 │
-│ 📟 CMD 1                 │ PS C:\Users\user> _             │
-│ 🚀 My Project            │                                 │
-│                           │                                 │
-│ [+ New Session]          │                                 │
-└───────────────────────────┴─────────────────────────────────┘
-```
+- **Windows**: `%APPDATA%/goutou-terminal/session.json`
 
 ## 📝 License
 
@@ -146,8 +139,8 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 🐛 Issues
 
-Found a bug? Have a feature request? [Open an issue](https://github.com/YOUR_USERNAME/doghead-terminal-workspace/issues)
+Found a bug? Have a feature request? [Open an issue](https://github.com/chenhua-China/goutou-terminal/issues)
 
 ---
 
-*🐕 Doghead Agent Squad - Professional, Efficient, Reliable, with a touch of humor*
+*🐕 Goutou Terminal - Professional, Efficient, Reliable, with a touch of humor*

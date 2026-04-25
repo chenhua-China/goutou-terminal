@@ -1,7 +1,7 @@
 {
-  "name": "doghead-terminal-workspace",
+  "name": "goutou-terminal",
   "version": "1.0.0",
-  "description": "🐕 Doghead Terminal Workspace - A powerful terminal manager with aliases, templates, and auto-restore",
+  "description": "🐕 Goutou Terminal - A powerful terminal manager with aliases, templates, and auto-restore",
   "main": "main.js",
   "repository": {
     "type": "git",
