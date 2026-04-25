@@ -1,0 +1,82 @@
+[
+  {
+    "id": "tpl-1",
+    "name": "🚀 启动 Node 服务",
+    "shell": "powershell.exe",
+    "cwd": "C:\\Users\\57822",
+    "script": "npm run dev",
+    "icon": "🚀"
+  },
+  {
+    "id": "tpl-2",
+    "name": "📦 Git 拉取",
+    "shell": "C:\\Program Files\\Git\\bin\\bash.exe",
+    "cwd": "C:\\Users\\57822",
+    "script": "git pull && git status",
+    "icon": "📦"
+  },
+  {
+    "id": "tpl-3",
+    "name": "🔍 查看进程",
+    "shell": "powershell.exe",
+    "cwd": "C:\\Users\\57822",
+    "script": "Get-Process | Sort-Object CPU -Descending | Select-Object -First 10",
+    "icon": "🔍"
+  },
+  {
+    "id": "tpl-4",
+    "name": "🧹 清理 NPM 缓存",
+    "shell": "powershell.exe",
+    "cwd": "C:\\Users\\57822",
+    "script": "npm cache clean --force",
+    "icon": "🧹"
+  },
+  {
+    "id": "tpl-5",
+    "name": "📁 打开项目目录",
+    "shell": "C:\\Program Files\\Git\\bin\\bash.exe",
+    "cwd": "C:\\Users\\57822",
+    "script": "ls -la",
+    "icon": "📁"
+  },
+  {
+    "id": "tpl-6",
+    "name": "🌐 启动本地服务器",
+    "shell": "C:\\Program Files\\Git\\bin\\bash.exe",
+    "cwd": "C:\\Users\\57822",
+    "script": "python -m http.server 8080",
+    "icon": "🌐"
+  },
+  {
+    "id": "custom-1776595975166",
+    "name": "📝 qwen",
+    "shell": "C:\\Program Files\\Git\\bin\\bash.exe",
+    "cwd": "D:\\claw-project-space",
+    "script": "qwen",
+    "icon": "📝"
+  },
+  {
+    "id": "tpl-7",
+    "name": "🔧 查看 Git 日志",
+    "shell": "C:\\Program Files\\Git\\bin\\bash.exe",
+    "cwd": "C:\\Users\\57822",
+    "script": "git log --oneline -10",
+    "icon": "🔧"
+  },
+  {
+    "id": "tpl-8",
+    "name": "📊 查看磁盘使用",
+    "shell": "powershell.exe",
+    "cwd": "C:\\Users\\57822",
+    "script": "Get-PSDrive -PSProvider FileSystem | Select-Object Name,Used,Free | Format-Table",
+    "icon": "📊"
+  },
+  {
+    "id": "custom-1776608670512",
+    "name": "📝 opencode",
+    "shell": "powershell.exe",
+    "cwd": "D:\\claw-project-space",
+    "script": "opencode",
+    "icon": "📝"
+  }
+]

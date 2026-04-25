@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';">
+  <title>🐕 狗头管家终端工作台</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="node_modules/xterm/css/xterm.css">
+</head>
+<body>
+  <div class="container">
+    <!-- 左侧实例列表 -->
+    <div class="sidebar">
+      <div class="sidebar-header">
+        <h2>📋 会话列表</h2>
+      </div>
+      <div class="session-list" id="sessionList">
+        <!-- 会话项由 JS 动态生成 -->
+      </div>
+      <div class="sidebar-footer">
+        <button id="newSessionBtn" class="btn btn-primary">➕ 新建会话</button>
+      </div>
+    </div>
+
+    <!-- 右侧终端区域 -->
+    <div class="main-area">
+      <!-- 顶部目录栏 -->
+      <div class="cwd-bar" id="cwdBar">
+        <span class="cwd-text" id="cwdText">~</span>
+      </div>
+
+      <!-- 终端容器 -->
+      <div class="terminal-container" id="terminalContainer">
+        <div class="empty-state" id="emptyState">
+          <h1>👋 欢迎使用终端工作台</h1>
+          <p>点击左侧实例或按 Ctrl+T 打开新终端</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
