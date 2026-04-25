@@ -1,82 +1,66 @@
 [
   {
     "id": "tpl-1",
-    "name": "🚀 启动 Node 服务",
+    "name": "🚀 Start Node Server",
     "shell": "powershell.exe",
-    "cwd": "C:\\Users\\57822",
+    "cwd": "%USERPROFILE%",
     "script": "npm run dev",
     "icon": "🚀"
   },
   {
     "id": "tpl-2",
-    "name": "📦 Git 拉取",
+    "name": "📦 Git Pull",
     "shell": "C:\\Program Files\\Git\\bin\\bash.exe",
-    "cwd": "C:\\Users\\57822",
+    "cwd": "%USERPROFILE%",
     "script": "git pull && git status",
     "icon": "📦"
   },
   {
     "id": "tpl-3",
-    "name": "🔍 查看进程",
+    "name": "🔍 View Processes",
     "shell": "powershell.exe",
-    "cwd": "C:\\Users\\57822",
+    "cwd": "%USERPROFILE%",
     "script": "Get-Process | Sort-Object CPU -Descending | Select-Object -First 10",
     "icon": "🔍"
   },
   {
     "id": "tpl-4",
-    "name": "🧹 清理 NPM 缓存",
+    "name": "🧹 Clear NPM Cache",
     "shell": "powershell.exe",
-    "cwd": "C:\\Users\\57822",
+    "cwd": "%USERPROFILE%",
     "script": "npm cache clean --force",
     "icon": "🧹"
   },
   {
     "id": "tpl-5",
-    "name": "📁 打开项目目录",
+    "name": "📁 List Directory",
     "shell": "C:\\Program Files\\Git\\bin\\bash.exe",
-    "cwd": "C:\\Users\\57822",
+    "cwd": "%USERPROFILE%",
     "script": "ls -la",
     "icon": "📁"
   },
   {
     "id": "tpl-6",
-    "name": "🌐 启动本地服务器",
+    "name": "🌐 Start Local Server",
     "shell": "C:\\Program Files\\Git\\bin\\bash.exe",
-    "cwd": "C:\\Users\\57822",
+    "cwd": "%USERPROFILE%",
     "script": "python -m http.server 8080",
     "icon": "🌐"
   },
   {
-    "id": "custom-1776595975166",
-    "name": "📝 qwen",
-    "shell": "C:\\Program Files\\Git\\bin\\bash.exe",
-    "cwd": "D:\\claw-project-space",
-    "script": "qwen",
-    "icon": "📝"
-  },
-  {
     "id": "tpl-7",
-    "name": "🔧 查看 Git 日志",
+    "name": "🔧 View Git Log",
     "shell": "C:\\Program Files\\Git\\bin\\bash.exe",
-    "cwd": "C:\\Users\\57822",
+    "cwd": "%USERPROFILE%",
     "script": "git log --oneline -10",
     "icon": "🔧"
   },
   {
     "id": "tpl-8",
-    "name": "📊 查看磁盘使用",
+    "name": "📊 Disk Usage",
     "shell": "powershell.exe",
-    "cwd": "C:\\Users\\57822",
+    "cwd": "%USERPROFILE%",
     "script": "Get-PSDrive -PSProvider FileSystem | Select-Object Name,Used,Free | Format-Table",
     "icon": "📊"
-  },
-  {
-    "id": "custom-1776608670512",
-    "name": "📝 opencode",
-    "shell": "powershell.exe",
-    "cwd": "D:\\claw-project-space",
-    "script": "opencode",
-    "icon": "📝"
   }
 ]
