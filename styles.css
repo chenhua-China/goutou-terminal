@@ -858,19 +858,11 @@ body {
   outline: none;
 }
 
-/* 确保弹窗中的输入框可以正常输入（支持 IME） */
+/* 确保弹窗中的输入框可以正常输入 */
 .modal input, .modal textarea {
   pointer-events: auto;
   user-select: text;
   -webkit-user-select: text;
-  ime-mode: active;
-  -webkit-user-modify: read-write-plaintext-only;
-}
-
-/* 输入框编辑模式 */
-.modal input:focus {
-  ime-mode: active;
-  outline: none;
 }
 
 .form-group input:focus, .form-group select:focus, .form-group textarea:focus {

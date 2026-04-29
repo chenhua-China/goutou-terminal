@@ -17,11 +17,6 @@ const processStats = new Map();
 let memoryHistory = [];
 const MAX_MEMORY_HISTORY = 60; // 保存最近60个采样点（10分钟）
 
-// 进程池
-const processPool = new Map();
-const MAX_POOL_SIZE = 5;
-const POOL_CLEANUP_INTERVAL = 300000; // 5分钟清理一次
-
 // 使用用户数据目录存储可写文件
 const userDataPath = app.getPath('userData');
 const SESSION_FILE = path.join(userDataPath, 'session.json');
@@ -162,7 +157,7 @@ function startProcessMonitor() {
       mainWindow.webContents.send('process-monitor-update', stats);
     }
     
-  }, 10000); // 每10秒检查一次
+  }, 60000); // 每60秒检查一次
 }
 
 // 停止进程监控
@@ -245,9 +240,6 @@ app.whenReady().then(() => {
   startProcessMonitor();
   console.log('[Main] 进程监控已启动');
   
-  // 启动进程池清理
-  startProcessPoolCleanup();
-  console.log('[Main] 进程池清理已启动');
   
   // 监听渲染进程崩溃
   app.on('render-process-gone', (event, webContents, details) => {
@@ -265,18 +257,6 @@ app.on('window-all-closed', () => {
   stopProcessMonitor();
   console.log('[Main] 进程监控已停止');
   
-  // 停止进程池清理
-  stopProcessPoolCleanup();
-  console.log('[Main] 进程池清理已停止');
-  
-  // 清理所有进程池中的进程
-  processPool.forEach((pool, shellPath) => {
-    pool.forEach(ptyProcess => {
-      try { ptyProcess.kill(); } catch (e) {}
-    });
-  });
-  processPool.clear();
-  console.log('[Main] 进程池已清空');
   
   if (process.platform !== 'darwin') app.quit();
 });
@@ -375,22 +355,16 @@ ipcMain.handle('get-shells', () => {
 
 ipcMain.handle('get-templates', () => {
   try {
-    // 优先从用户数据目录加载
+    // 只从用户数据目录加载，不自动创建默认模板
     if (fs.existsSync(TEMPLATES_FILE)) {
       const userTemplates = JSON.parse(fs.readFileSync(TEMPLATES_FILE, 'utf-8'));
       console.log('[Main] 从用户数据目录加载模板，数量:', userTemplates.length);
       return userTemplates;
     }
     
-    // 如果用户数据目录没有，从打包目录复制默认模板
-    const defaultTemplatesFile = path.join(__dirname, 'templates.json');
-    if (fs.existsSync(defaultTemplatesFile)) {
-      const defaultTemplates = JSON.parse(fs.readFileSync(defaultTemplatesFile, 'utf-8'));
-      // 保存到用户数据目录
-      fs.writeFileSync(TEMPLATES_FILE, JSON.stringify(defaultTemplates, null, 2), 'utf-8');
-      console.log('[Main] 从默认模板复制，数量:', defaultTemplates.length);
-      return defaultTemplates;
-    }
+    // 用户数据目录没有模板，返回空数组（不自动创建默认模板）
+    console.log('[Main] 用户数据目录没有模板，返回空数组');
+    return [];
   } catch (e) {
     console.error('[Main] 加载模板失败:', e.message);
   }
@@ -634,72 +608,30 @@ ipcMain.handle('create-terminal', async (event, options) => {
       console.log('[Main] PATH:', env['PATH']);
     }
     
-    console.log('[Main] 准备 spawn，参数:', JSON.stringify({
-      shell: shellPath,
+    // 创建新的进程
+    const ptyProcess = pty.spawn(shellPath, [], {
+      name: 'xterm-256color',
+      cols: cols || 80,
+      rows: rows || 24,
       cwd: cwd || process.env.USERPROFILE,
-      cols, rows,
-      useConpty: true
-    }));
-    
-    // 尝试从进程池获取可复用的进程
-    let ptyProcess = getFromProcessPool(shellPath);
-    let fromPool = false;
-    
-    if (ptyProcess) {
-      fromPool = true;
-      console.log(`[Main] 使用进程池中的进程 (PID: ${ptyProcess.pid})`);
-      
-      // 重置终端尺寸
-      try {
-        ptyProcess.resize(cols || 80, rows || 24);
-      } catch (e) {
-        console.warn('[Main] 重置终端尺寸失败:', e.message);
-      }
-    } else {
-      // 创建新的进程
-      ptyProcess = pty.spawn(shellPath, [], {
-        name: 'xterm-256color',
-        cols: cols || 80,
-        rows: rows || 24,
-        cwd: cwd || process.env.USERPROFILE,
-        env: env,
-        // 所有 Shell 都使用 ConPTY（Windows 10+ 原生支持）
-        useConpty: true,
-        conptyInheritCursor: true,
-      });
-      console.log(`[Main] 创建新的 PTY 进程 (PID: ${ptyProcess.pid})`);
-    }
+      env: env,
+      useConpty: true,
+      conptyInheritCursor: true,
+    });
 
-    // 如果是 Git Bash，在启动后执行无颜色配置
     if (isGitBash) {
-      // 直接在 shell 中执行命令，而不是 source 外部文件
-      console.log('[Main] Git Bash 配置中...');
       setTimeout(() => {
         try {
-          // 禁用 ls 颜色
-          ptyProcess.write('alias ls="ls --color=never"\n');
-          ptyProcess.write('alias ll="ls -l --color=never"\n');
-          ptyProcess.write('alias la="ls -a --color=never"\n');
-          // 禁用 grep 颜色
-          ptyProcess.write('alias grep="grep --color=never"\n');
-          // 禁用 Git 颜色
-          ptyProcess.write('git config --global color.ui false\n');
-          // 设置环境变量
-          ptyProcess.write('export CLICOLOR=0\n');
-          ptyProcess.write('export LS_COLORS=""\n');
-          // 显示当前 PATH
-          ptyProcess.write('echo "[狗头管家] PATH 配置完成，Node.js 路径已包含"\n');
-          console.log('[Main] Git Bash 配置完成');
+          ptyProcess.write('alias ls="ls --color=never"\nalias ll="ls -l --color=never"\nalias la="ls -a --color=never"\nalias grep="grep --color=never"\n');
+          ptyProcess.write('export CLICOLOR=0\nLS_COLORS=""\n');
         } catch (e) {
-          console.error('[Main] Git Bash 配置失败:', e.message);
+          console.error('[Main] Git Bash 颜色配置失败:', e.message);
         }
-      }, 500);
+      }, 300);
     }
 
     // 保存终端用户数据
     ptyProcess.userData = { shell, cwd, script, name, icon };
-
-    console.log(`[Main] PTY spawn 成功，PID=${ptyProcess.pid}`);
 
     terminals.set(id, ptyProcess);
 
@@ -710,87 +642,7 @@ ipcMain.handle('create-terminal', async (event, options) => {
     });
 
     ptyProcess.onExit(({ exitCode, signal }) => {
-      console.log(`[Main] 终端 ${id} 退出，code=${exitCode}, signal=${signal}`);
       terminals.delete(id);
-      
-      // 检查是否需要自动恢复（非正常退出）
-      const shouldAutoRestore = (exitCode !== 0 || signal) && !ptyProcess.userClosed;
-      
-      if (shouldAutoRestore) {
-        console.log(`[Main] 检测到终端 ${id} 异常退出，尝试自动恢复...`);
-        
-        // 延迟恢复，避免立即重试导致问题
-        setTimeout(() => {
-          try {
-            // 获取终端配置
-            const userData = ptyProcess.userData || {};
-            const restoreOptions = {
-              cwd: userData.cwd,
-              shell: userData.shell,
-              id: id, // 使用相同的 ID
-              script: userData.script,
-              cols: 80,
-              rows: 24,
-              name: userData.name || '恢复的终端',
-              icon: userData.icon || '🔄'
-            };
-            
-            // 重新创建终端
-            const result = pty.spawn(restoreOptions.shell, [], {
-              name: 'xterm-256color',
-              cols: restoreOptions.cols,
-              rows: restoreOptions.rows,
-              cwd: restoreOptions.cwd || process.env.USERPROFILE,
-              env: getFullUserEnv(),
-              useConpty: true,
-              conptyInheritCursor: true,
-            });
-            
-            // 设置恢复的终端
-            result.userData = userData;
-            terminals.set(id, result);
-            
-            // 设置事件监听
-            result.onData(data => {
-              if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send('terminal-data', { id, data });
-              }
-            });
-            
-            result.onExit(({ exitCode, signal }) => {
-              console.log(`[Main] 恢复的终端 ${id} 退出，code=${exitCode}`);
-              terminals.delete(id);
-              saveSession();
-              if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send('terminal-exit', { id, exitCode, signal });
-              }
-            });
-            
-            // 重新执行脚本
-            if (userData.script && userData.script.trim()) {
-              setTimeout(() => {
-                if (terminals.has(id)) {
-                  result.write(`${userData.script}\r`);
-                }
-              }, 500);
-            }
-            
-            console.log(`[Main] 终端 ${id} 自动恢复成功 (PID: ${result.pid})`);
-            
-            // 通知前端终端已恢复
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send('terminal-restored', { 
-                id, 
-                pid: result.pid,
-                message: '终端已自动恢复'
-              });
-            }
-            
-          } catch (error) {
-            console.error(`[Main] 终端 ${id} 自动恢复失败:`, error.message);
-          }
-        }, 1000); // 1秒后尝试恢复
-      }
       
       // 退出时更新会话
       saveSession();
@@ -842,27 +694,9 @@ ipcMain.handle('close-terminal', (event, { id, forceKill = false }) => {
   const ptyProcess = terminals.get(id);
   if (ptyProcess) {
     try {
-      // 标记为用户手动关闭，不进行自动恢复
       ptyProcess.userClosed = true;
-      
-      if (forceKill) {
-        // 强制关闭，不放入进程池
-        ptyProcess.kill();
-        console.log(`[Main] 强制关闭终端 ${id} (PID: ${ptyProcess.pid})`);
-      } else {
-        // 尝试将进程放回进程池
-        const shellPath = ptyProcess.userData?.shell || '';
-        if (shellPath && !ptyProcess.killed) {
-          addToProcessPool(shellPath, ptyProcess);
-          console.log(`[Main] 终端 ${id} 放入进程池 (PID: ${ptyProcess.pid})`);
-        } else {
-          ptyProcess.kill();
-          console.log(`[Main] 关闭终端 ${id} (PID: ${ptyProcess.pid})`);
-        }
-      }
-      
+      ptyProcess.kill();
       terminals.delete(id);
-      // 关闭时更新会话
       saveSession();
       return { success: true };
     } catch (e) {
@@ -922,8 +756,7 @@ ipcMain.handle('get-performance-report', () => {
       loadAvg: os.loadavg()
     },
     terminals: {
-      count: terminals.size,
-      poolSize: Array.from(processPool.values()).reduce((sum, pool) => sum + pool.length, 0)
+      count: terminals.size
     }
   };
 });
@@ -1040,86 +873,6 @@ ipcMain.handle('get-system-status', () => {
   return status;
 });
 
-// 进程池管理
-function addToProcessPool(shellPath, ptyProcess) {
-  if (!processPool.has(shellPath)) {
-    processPool.set(shellPath, []);
-  }
-  
-  const pool = processPool.get(shellPath);
-  if (pool.length < MAX_POOL_SIZE) {
-    // 标记进程为可复用
-    ptyProcess.poolReady = true;
-    ptyProcess.lastUsed = Date.now();
-    pool.push(ptyProcess);
-    console.log(`[Main] 进程添加到池中: ${shellPath}, 池大小: ${pool.length}`);
-  } else {
-    // 池已满，直接关闭进程
-    try { ptyProcess.kill(); } catch (e) {}
-  }
-}
-
-function getFromProcessPool(shellPath) {
-  if (!processPool.has(shellPath)) {
-    return null;
-  }
-  
-  const pool = processPool.get(shellPath);
-  for (let i = 0; i < pool.length; i++) {
-    const ptyProcess = pool[i];
-    if (ptyProcess.poolReady && !ptyProcess.killed) {
-      // 从池中移除
-      pool.splice(i, 1);
-      ptyProcess.poolReady = false;
-      console.log(`[Main] 从进程池获取: ${shellPath}, 剩余: ${pool.length}`);
-      return ptyProcess;
-    }
-  }
-  return null;
-}
-
-function cleanupProcessPool() {
-  const now = Date.now();
-  let cleaned = 0;
-  
-  processPool.forEach((pool, shellPath) => {
-    for (let i = pool.length - 1; i >= 0; i--) {
-      const ptyProcess = pool[i];
-      // 清理超过30分钟未使用的进程
-      if (now - ptyProcess.lastUsed > 1800000) { // 30分钟
-        try {
-          ptyProcess.kill();
-          pool.splice(i, 1);
-          cleaned++;
-        } catch (e) {}
-      }
-    }
-  });
-  
-  if (cleaned > 0) {
-    console.log(`[Main] 进程池清理完成，清理了 ${cleaned} 个进程`);
-  }
-}
-
-// 启动进程池清理定时器
-let poolCleanupInterval = null;
-function startProcessPoolCleanup() {
-  if (poolCleanupInterval) {
-    clearInterval(poolCleanupInterval);
-  }
-  
-  poolCleanupInterval = setInterval(() => {
-    cleanupProcessPool();
-  }, POOL_CLEANUP_INTERVAL);
-}
-
-function stopProcessPoolCleanup() {
-  if (poolCleanupInterval) {
-    clearInterval(poolCleanupInterval);
-    poolCleanupInterval = null;
-  }
-}
-
 // 健康检查
 ipcMain.handle('health-check', () => {
   const monitorReport = getProcessMonitorReport();
@@ -1185,6 +938,8 @@ ipcMain.handle('edit-alias-dialog', async (event, { currentName, originalName })
       },
     });
 
+    const escapedCurrentName = currentName.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const escapedOriginalName = originalName.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     const html = `
       <!DOCTYPE html>
       <html>
@@ -1241,8 +996,8 @@ ipcMain.handle('edit-alias-dialog', async (event, { currentName, originalName })
         </div>
         <div class="body">
           <label>会话别名</label>
-          <input type="text" id="aliasInput" value="${currentName}" placeholder="输入别名">
-          <div class="hint">💡 原始名称: ${originalName}</div>
+          <input type="text" id="aliasInput" value="${escapedCurrentName}" placeholder="输入别名">
+          <div class="hint">💡 原始名称: ${escapedOriginalName}</div>
         </div>
         <div class="footer">
           <button class="cancel-btn" id="cancelBtn">取消</button>
@@ -1251,7 +1006,7 @@ ipcMain.handle('edit-alias-dialog', async (event, { currentName, originalName })
         <script>
           const { ipcRenderer } = require('electron');
           const input = document.getElementById('aliasInput');
-          setTimeout(() => { input.focus(); input.select(); }, 100);
+          requestAnimationFrame(() => { input.focus(); input.select(); });
           document.getElementById('saveBtn').addEventListener('click', () => {
             ipcRenderer.send('alias-dialog-result', { newName: input.value });
           });

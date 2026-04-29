@@ -47,11 +47,7 @@
       "renderer.js",
       "index.html",
       "styles.css",
-      "templates.json",
       "node_modules/**/*"
-    ],
-    "extraResources": [
-      "templates.json"
     ],
     "win": {
       "target": [
@@ -72,7 +68,8 @@
       "createStartMenuShortcut": true,
       "shortcutName": "狗头管家终端",
       "runAfterFinish": true,
-      "language": "2052"
+      "language": "2052",
+      "deleteAppDataOnUninstall": false
     },
     "asar": true,
     "asarUnpack": [

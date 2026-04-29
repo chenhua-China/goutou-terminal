@@ -17,17 +17,6 @@ let healthStatus = {
   memory: { estimatedUsageMB: 0, usagePercentage: 0 }
 };
 
-// 性能监控
-let performanceStats = {
-  terminalSwitches: 0,
-  terminalCreates: 0,
-  terminalCloses: 0,
-  dataWrites: 0,
-  lastSwitchTime: 0,
-  switchTimes: [],
-  renderTimes: []
-};
-
 // DOM 元素
 const sessionList = document.getElementById('sessionList');
 const terminalContainer = document.getElementById('terminalContainer');
@@ -120,7 +109,6 @@ async function init() {
   });
 
   ipcRenderer.on('terminal-data', (event, { id, data }) => {
-    const startTime = performance.now();
     const term = terminals.get(id);
     if (!term) return;
 
@@ -142,18 +130,7 @@ async function init() {
       term._writeBuffer = '';
     }
 
-    // 每 20 次写入后刷新一次 fit（提高频率，防止长内容移位）
-    term._fitCounter++;
-    if (term._fitCounter >= 20) {
-      term._fitCounter = 0;
-      try {
-        term.fitAddon.fit();
-      } catch (e) {
-        console.error('[Renderer] fit 失败:', e.message);
-      }
-    }
-
-    // 停止输出后 100ms 做最终 fit（缩短时间）
+    // 停止输出后 200ms 做最终 fit，避免在大量输出期间频繁重排
     term._writeTimer = setTimeout(() => {
       try {
         term.fitAddon.fit();
@@ -170,12 +147,7 @@ async function init() {
         console.error('[Renderer] 最终 fit 失败:', e.message);
       }
       term._fitCounter = 0;
-    }, 100);
-    
-    // 记录性能数据
-    recordPerformanceEvent('data');
-    const renderTime = performance.now() - startTime;
-    recordPerformanceEvent('render', renderTime);
+    }, 200);
   });
 
   ipcRenderer.on('terminal-exit', (event, { id, exitCode }) => {
@@ -890,15 +862,16 @@ function showEditTemplateModal(template) {
     cwdInput.value = selected.dataset.cwd;
   });
 
-  editModal.querySelector('#closeEditModalBtn').addEventListener('click', () => editModal.remove());
-  editModal.querySelector('#cancelEditBtn').addEventListener('click', () => editModal.remove());
+  editModal.querySelector('#closeEditModalBtn').addEventListener('click', () => { editModal.remove(); focusActiveTerminal(); });
+  editModal.querySelector('#cancelEditBtn').addEventListener('click', () => { editModal.remove(); focusActiveTerminal(); });
   editModal.querySelector('#saveEditBtn').addEventListener('click', () => saveEditTemplate(template.id, editModal));
   // 点击弹窗外部不关闭，必须点击确认或取消才关闭
   // editModal.addEventListener('click', (e) => {
   //   if (e.target === editModal) editModal.remove();
   // });
 
-  setTimeout(() => editModal.classList.add('active'), 10);
+  blurActiveTerminal();
+  requestAnimationFrame(() => editModal.classList.add('active'));
 }
 
 async function saveEditTemplate(id, modal) {
@@ -984,7 +957,22 @@ function getScriptPreview(script) {
   return `${lines[0]} ... (共${lines.length}行)`;
 }
 
+function blurActiveTerminal() {
+  if (activeTerminalId) {
+    const term = terminals.get(activeTerminalId);
+    if (term) term.terminal.blur();
+  }
+}
+
+function focusActiveTerminal() {
+  if (activeTerminalId) {
+    const term = terminals.get(activeTerminalId);
+    if (term) term.terminal.focus();
+  }
+}
+
 function showMainModal() {
+  blurActiveTerminal();
   // 关闭旧的弹窗,重新创建以获取最新数据
   if (modalOverlay) {
     modalOverlay.remove();
@@ -993,11 +981,14 @@ function showMainModal() {
   createMainModal();
   modalOverlay.classList.add('active');
 }
-function hideMainModal() { modalOverlay.classList.remove('active'); }
+function hideMainModal() {
+  modalOverlay.classList.remove('active');
+  focusActiveTerminal();
+}
 function showCreateTemplateModal() {
+  blurActiveTerminal();
   createTemplateModal.classList.add('active');
-  // 等待 DOM 渲染完成后聚焦
-  setTimeout(() => {
+  requestAnimationFrame(() => {
     const nameInput = createTemplateModal.querySelector('#tplName');
     if (nameInput) {
       nameInput.focus();
@@ -1005,15 +996,22 @@ function showCreateTemplateModal() {
     } else {
       console.error('[Renderer] 找不到模板名称输入框');
     }
-  }, 100);
+  });
 }
-function hideCreateTemplateModal() { createTemplateModal.classList.remove('active'); }
+function hideCreateTemplateModal() {
+  createTemplateModal.classList.remove('active');
+  focusActiveTerminal();
+}
 function showManageTemplateModal() {
+  blurActiveTerminal();
   manageTemplateModal?.remove();
   createManageTemplateModal();
   manageTemplateModal.classList.add('active');
 }
-function hideManageTemplateModal() { manageTemplateModal.classList.remove('active'); }
+function hideManageTemplateModal() {
+  manageTemplateModal.classList.remove('active');
+  focusActiveTerminal();
+}
 
 async function saveTemplate() {
   console.log('[Renderer] 保存模板');
@@ -1101,7 +1099,27 @@ function renderTemplateGrid() {
 }
 
 function createTerminal(preset) {
+  // 检查是否已存在相同模板的终端（相同 shell + cwd + script）
+  const existingId = findExistingTerminal(preset);
+  if (existingId) {
+    // 已存在相同模板的终端，直接激活并聚焦
+    activateTerminal(existingId);
+    const term = terminals.get(existingId);
+    if (term) term.terminal.focus();
+    return;
+  }
   openTerminal({ ...preset, skipActivate: false });
+}
+
+// 查找是否已存在相同模板的终端
+function findExistingTerminal(preset) {
+  for (const [id, term] of terminals) {
+    const p = term.preset;
+    if (p.shell === preset.shell && p.cwd === preset.cwd && (p.script || '') === (preset.script || '')) {
+      return id;
+    }
+  }
+  return null;
 }
 
 async function openTerminal(preset) {
@@ -1312,14 +1330,20 @@ async function openTerminal(preset) {
 
     document.body.appendChild(menu);
 
-    // 点击其他地方关闭菜单
-    const closeMenu = () => {
+    // 点击其他地方关闭菜单（用 mousedown 更早捕获，避免 click 被延迟）
+    const closeMenu = (e) => {
+      // 如果点击的是菜单内部，不关闭
+      if (menu.contains(e.target)) return;
       menu.remove();
-      document.removeEventListener('click', closeMenu);
+      document.removeEventListener('mousedown', closeMenu);
+      // 关闭后焦点回到终端
+      const term = terminals.get(id);
+      if (term) term.terminal.focus();
     };
-    setTimeout(() => {
-      document.addEventListener('click', closeMenu);
-    }, 100);
+    // 用 requestAnimationFrame 确保在下一帧才注册，避免当前右键事件被误捕获
+    requestAnimationFrame(() => {
+      document.addEventListener('mousedown', closeMenu);
+    });
   });
 
   await new Promise(resolve => setTimeout(resolve, 50));
@@ -1361,48 +1385,22 @@ async function openTerminal(preset) {
   if (!preset.skipActivate) {
     activateTerminal(id);
 
-    // 使用 requestAnimationFrame 配合浏览器渲染周期进行刷新
-    const refreshSequence = [
-      { delay: 0, raf: 1 },    // 立即 + 1 帧
-      { delay: 50, raf: 2 },   // 50ms + 2 帧
-      { delay: 150, raf: 3 },  // 150ms + 3 帧
-      { delay: 300, raf: 2 },  // 300ms + 2 帧
-      { delay: 500, raf: 1 },  // 500ms + 1 帧
-    ];
-
-    const forceRefresh = () => {
-      // 确保 wrapper 可见
+    // 分两次 fit：第一次立即执行，第二次等布局稳定后再执行
+    const fitAndFocus = () => {
       wrapper.style.display = 'block';
-      wrapper.offsetHeight; // 强制重排
-
-      // 调整大小
-      fitAddon.fit();
-
-      // 聚焦
-      terminal.focus();
+      // 关键修复：先显示，等浏览器布局完成后再 fit
+      requestAnimationFrame(() => {
+        fitAddon.fit();
+        terminal.focus();
+      });
     };
-
-    // 执行刷新序列
-    refreshSequence.forEach((step, index) => {
+    requestAnimationFrame(() => {
+      fitAndFocus();
       setTimeout(() => {
-        let rafCount = step.raf;
-        const doRaf = () => {
-          if (rafCount > 0) {
-            requestAnimationFrame(() => {
-              rafCount--;
-              doRaf();
-            });
-          } else {
-            forceRefresh();
-            console.log(`[Renderer] 终端刷新 ${index + 1}/${refreshSequence.length}`);
-          }
-        };
-        doRaf();
-      }, step.delay);
+        fitAndFocus();
+        console.log('[Renderer] 终端刷新完成');
+      }, 150);
     });
-
-    // 额外:在首次数据输出后再刷新一次
-    // 注意:已在 terminal-data 事件处理中实现了更完善的刷新机制
   }
 
   // 窗口 resize 时调整终端大小
@@ -1451,9 +1449,7 @@ function createSessionItem(id, name, cwd, icon) {
 
   // 单击激活终端
   item.addEventListener('click', (e) => {
-    console.log('[Renderer] 点击会话项:', id, '目标:', e.target.className);
     if (!e.target.classList.contains('session-close')) {
-      console.log('[Renderer] 激活终端:', id);
       activateTerminal(id);
     }
   });
@@ -1542,14 +1538,15 @@ function showSessionContextMenu(e, id) {
 
   document.body.appendChild(menu);
 
-  // 点击其他地方关闭菜单
-  const closeMenu = () => {
+  // 点击其他地方关闭菜单（用 mousedown 更早捕获，避免 click 被延迟）
+  const closeMenu = (e) => {
+    if (menu.contains(e.target)) return;
     menu.remove();
-    document.removeEventListener('click', closeMenu);
+    document.removeEventListener('mousedown', closeMenu);
   };
-  setTimeout(() => {
-    document.addEventListener('click', closeMenu);
-  }, 100);
+  requestAnimationFrame(() => {
+    document.addEventListener('mousedown', closeMenu);
+  });
 }
 
 // 编辑会话别名
@@ -1745,7 +1742,7 @@ function startMonitor() {
     } catch (e) {
       console.error('[Renderer] 监控失败:', e.message);
     }
-  }, 30000); // 每30秒检查一次
+  }, 120000); // 每2分钟检查一次
   
   console.log('[Renderer] 监控已启动');
 }
@@ -1756,7 +1753,7 @@ async function updateHealthStatus() {
     const health = await ipcRenderer.invoke('health-check');
     healthStatus = health;
     updateStatusDisplay();
-    console.log('[Renderer] 状态已更新，终端数量:', terminals.size);
+    // 状态已更新
   } catch (e) {
     console.error('[Renderer] 更新状态失败:', e.message);
   }
@@ -1875,43 +1872,25 @@ function showStatusWarning(health) {
 // 显示性能报告
 async function showPerformanceReport() {
   try {
-    const performanceReport = getPerformanceReport();
     const systemReport = await ipcRenderer.invoke('get-performance-report');
     
     const report = `
-⚡ 性能报告
+⚡ 系统状态
 ====================
-⏰ 时间: ${new Date(performanceReport.timestamp).toLocaleString()}
+⏰ 时间: ${new Date().toLocaleString()}
 
-📊 使用统计
-• 终端切换: ${performanceReport.stats.terminalSwitches} 次
-• 终端创建: ${performanceReport.stats.terminalCreates} 次
-• 终端关闭: ${performanceReport.stats.terminalCloses} 次
-• 数据写入: ${performanceReport.stats.dataWrites} 次
-
-📈 性能指标
-• 平均切换时间: ${performanceReport.performance.avgSwitchTime}
-• 平均渲染时间: ${performanceReport.performance.avgRenderTime}
-
-🖥️ 系统状态
+🖥️ 系统信息
 • 平台: ${systemReport.system.platform} (${systemReport.system.arch})
 • CPU 核心: ${systemReport.system.cpus} 个
 • 系统内存: ${systemReport.system.totalMemoryMB} MB
 • 可用内存: ${systemReport.system.freeMemoryMB} MB
 • 终端数量: ${systemReport.terminals.count} 个
-• 进程池: ${systemReport.terminals.poolSize} 个进程
-
-📋 优化建议
-${performanceReport.recommendations.length > 0 
-  ? performanceReport.recommendations.map(r => `• ${r}`).join('\n')
-  : '• 性能表现良好'
-}
 `;
     
     alert(report);
   } catch (e) {
-    console.error('[Renderer] 获取性能报告失败:', e.message);
-    alert('获取性能报告失败: ' + e.message);
+    console.error('[Renderer] 获取系统状态失败:', e.message);
+    alert('获取系统状态失败: ' + e.message);
   }
 }
 
@@ -1960,69 +1939,6 @@ ${health.recommendations.length > 0
   }
 }
 
-// 性能监控函数
-function recordPerformanceEvent(type, duration) {
-  switch (type) {
-    case 'switch':
-      performanceStats.terminalSwitches++;
-      performanceStats.lastSwitchTime = Date.now();
-      if (duration) {
-        performanceStats.switchTimes.push(duration);
-        // 只保留最近20次切换时间
-        if (performanceStats.switchTimes.length > 20) {
-          performanceStats.switchTimes.shift();
-        }
-      }
-      break;
-    case 'create':
-      performanceStats.terminalCreates++;
-      break;
-    case 'close':
-      performanceStats.terminalCloses++;
-      break;
-    case 'render':
-      if (duration) {
-        performanceStats.renderTimes.push(duration);
-        // 只保留最近50次渲染时间
-        if (performanceStats.renderTimes.length > 50) {
-          performanceStats.renderTimes.shift();
-        }
-      }
-      break;
-    case 'data':
-      performanceStats.dataWrites++;
-      break;
-  }
-}
-
-// 获取性能报告
-function getPerformanceReport() {
-  const avgSwitchTime = performanceStats.switchTimes.length > 0 
-    ? Math.round(performanceStats.switchTimes.reduce((a, b) => a + b, 0) / performanceStats.switchTimes.length)
-    : 0;
-    
-  const avgRenderTime = performanceStats.renderTimes.length > 0
-    ? Math.round(performanceStats.renderTimes.reduce((a, b) => a + b, 0) / performanceStats.renderTimes.length)
-    : 0;
-    
-  return {
-    timestamp: Date.now(),
-    stats: {
-      terminalSwitches: performanceStats.terminalSwitches,
-      terminalCreates: performanceStats.terminalCreates,
-      terminalCloses: performanceStats.terminalCloses,
-      dataWrites: performanceStats.dataWrites
-    },
-    performance: {
-      avgSwitchTime: avgSwitchTime + 'ms',
-      avgRenderTime: avgRenderTime + 'ms',
-      switchTimes: performanceStats.switchTimes,
-      renderTimes: performanceStats.renderTimes.slice(-10) // 返回最近10次
-    },
-    recommendations: []
-  };
-}
-
 // 优化终端切换
 function optimizeTerminalSwitch(id) {
   const startTime = performance.now();
@@ -2043,32 +1959,30 @@ function optimizeTerminalSwitch(id) {
         if (s) s.classList.remove('active');
       });
       
-      // 显示当前终端
+      // 先显示当前终端（不立即 fit，等浏览器完成布局后再 fit）
       wrapper.style.display = 'block';
       if (sessionItem) sessionItem.classList.add('active');
       
-      // 立即 fit 并同步 PTY 尺寸
-      try {
-        term.fitAddon.fit();
-        const dims = term.fitAddon.proposeDimensions();
-        if (dims && dims.cols && dims.rows) {
-          ipcRenderer.invoke('resize-terminal', {
-            id: term.ptyId,
-            cols: dims.cols,
-            rows: dims.rows
-          });
+      // 关键修复：用 requestAnimationFrame 确保浏览器完成布局后再 fit
+      // 这样可以防止文本漂移和光标错位
+      requestAnimationFrame(() => {
+        try {
+          term.fitAddon.fit();
+          const dims = term.fitAddon.proposeDimensions();
+          if (dims && dims.cols && dims.rows) {
+            ipcRenderer.invoke('resize-terminal', {
+              id: term.ptyId,
+              cols: dims.cols,
+              rows: dims.rows
+            });
+          }
+        } catch (e) {
+          console.error('[Renderer] fit 失败:', e.message);
         }
-      } catch (e) {
-        console.error('[Renderer] fit 失败:', e.message);
-      }
+      });
       
       // 聚焦终端
       term.terminal.focus();
-      
-      const endTime = performance.now();
-      recordPerformanceEvent('switch', endTime - startTime);
-      
-      console.log(`[Renderer] 终端切换完成，耗时: ${endTime - startTime}ms`);
     }
   }
 }
