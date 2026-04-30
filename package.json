@@ -27,6 +27,7 @@
   "author": "Doghead Agent Squad",
   "license": "MIT",
   "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
     "electron": "^41.2.1",
     "electron-builder": "^24.13.3"
   },
@@ -75,7 +76,7 @@
     "asarUnpack": [
       "node_modules/node-pty"
     ],
-    "npmRebuild": false,
+    "npmRebuild": true,
     "downloadAlternateFFmpeg": false
   }
 }

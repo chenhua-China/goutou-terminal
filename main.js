@@ -4,6 +4,7 @@ const os = require('os');
 const fs = require('fs');
 
 let mainWindow;
+let focusInitialized = false;
 const terminals = new Map();
 
 // 终端数量限制（最多10个）
@@ -21,6 +22,7 @@ const MAX_MEMORY_HISTORY = 60; // 保存最近60个采样点（10分钟）
 const userDataPath = app.getPath('userData');
 const SESSION_FILE = path.join(userDataPath, 'session.json');
 const TEMPLATES_FILE = path.join(userDataPath, 'templates.json');
+const QUICK_REPLY_FILE = path.join(userDataPath, 'quick-reply.json');
 
 // 确保用户数据目录存在
 if (!fs.existsSync(userDataPath)) {
@@ -189,6 +191,8 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
+    show: false,
+    focusable: true,  // 明确声明窗口可聚焦
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
@@ -196,6 +200,38 @@ function createWindow() {
   });
 
   mainWindow.loadFile('index.html');
+
+  // 窗口准备好后显示并强制聚焦（多次尝试）
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+    mainWindow.moveTop();
+    
+    // 多次尝试强制聚焦
+    const forceFocus = () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.focus();
+        mainWindow.webContents.focus();
+        mainWindow.flashFrame(true);  // 闪烁任务栏，触发焦点
+        setTimeout(() => {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.flashFrame(false);
+          }
+        }, 200);
+      }
+    };
+    
+    forceFocus();
+    setTimeout(forceFocus, 50);
+    setTimeout(forceFocus, 200);
+    setTimeout(forceFocus, 500);
+    
+    console.log('[Main] 窗口已显示并尝试聚焦');
+  });
+
+  // 监听窗口获得焦点的事件
+  mainWindow.on('focus', () => {
+    console.log('[Main] 窗口获得焦点');
+  });
 
   mainWindow.on('close', (e) => {
     // 有终端运行时，显示二次确认
@@ -379,6 +415,40 @@ ipcMain.handle('save-templates', (event, templates) => {
     console.error('[Main] 保存模板失败:', e.message);
   }
   return { success: true };
+});
+
+// 快速回复模板管理
+ipcMain.handle('get-quick-reply', () => {
+  try {
+    if (fs.existsSync(QUICK_REPLY_FILE)) {
+      const data = JSON.parse(fs.readFileSync(QUICK_REPLY_FILE, 'utf-8'));
+      console.log('[Main] 加载快速回复模板，分组:', data.groups?.length || 0, '模板:', data.templates?.length || 0);
+      return data;
+    }
+    // 返回默认结构
+    const defaultData = {
+      groups: [
+        { id: 'grp-default', name: '默认分组', icon: '📁', collapsed: false, order: 1 }
+      ],
+      templates: []
+    };
+    fs.writeFileSync(QUICK_REPLY_FILE, JSON.stringify(defaultData, null, 2), 'utf-8');
+    return defaultData;
+  } catch (e) {
+    console.error('[Main] 加载快速回复失败:', e.message);
+    return { groups: [], templates: [] };
+  }
+});
+
+ipcMain.handle('save-quick-reply', (event, data) => {
+  try {
+    console.log('[Main] 保存快速回复，分组:', data.groups?.length || 0, '模板:', data.templates?.length || 0);
+    fs.writeFileSync(QUICK_REPLY_FILE, JSON.stringify(data, null, 2), 'utf-8');
+    return { success: true };
+  } catch (e) {
+    console.error('[Main] 保存快速回复失败:', e.message);
+    return { success: false, error: e.message };
+  }
 });
 
 // 获取保存的会话
@@ -854,6 +924,48 @@ ipcMain.handle('get-realtime-memory', () => {
   } catch (e) {
     return { error: e.message };
   }
+});
+
+// 聚焦窗口（解决弹窗输入框无法输入的焦点问题）
+ipcMain.handle('focus-window', (event, coords) => {
+  return new Promise((resolve) => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      resolve();
+      return;
+    }
+
+    const doFocusSequence = () => {
+      mainWindow.focus();
+      mainWindow.webContents.focus();
+      mainWindow.moveTop();
+      mainWindow.setAlwaysOnTop(true, 'screen-saver');
+      setTimeout(() => {
+        if (!mainWindow || mainWindow.isDestroyed()) { resolve(); return; }
+        if (coords) {
+          mainWindow.webContents.sendInputEvent({ type: 'mouseMove', x: coords.x, y: coords.y, button: 'left' });
+          mainWindow.webContents.sendInputEvent({ type: 'mouseDown', x: coords.x, y: coords.y, button: 'left', clickCount: 1 });
+          mainWindow.webContents.sendInputEvent({ type: 'mouseUp', x: coords.x, y: coords.y, button: 'left', clickCount: 1 });
+        }
+        setTimeout(() => {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.setAlwaysOnTop(false);
+            mainWindow.webContents.focus();
+          }
+          resolve();
+        }, 80);
+      }, 150);
+    };
+
+    if (!focusInitialized) {
+      // 首次弹窗：先 blur 再 focus，强制 OS 重新授予键盘焦点（会有一次短暂闪烁）
+      focusInitialized = true;
+      mainWindow.blur();
+      setTimeout(doFocusSequence, 60);
+    } else {
+      // 后续弹窗：窗口已有 OS 焦点，直接聚焦即可（无闪烁）
+      doFocusSequence();
+    }
+  });
 });
 
 // 获取系统状态
