@@ -721,14 +721,18 @@ ipcMain.handle('create-terminal', async (event, options) => {
       }
     });
 
-    // 执行脚本
+    // 执行脚本（逐行执行）
     if (script && script.trim()) {
       console.log(`[Main] 准备执行脚本：${script}`);
-      setTimeout(() => {
-        if (terminals.has(id)) {
-          ptyProcess.write(`${script}\r`);
-        }
-      }, 500);
+      const lines = script.split('\n').filter(line => line.trim());
+      lines.forEach((line, index) => {
+        setTimeout(() => {
+          if (terminals.has(id)) {
+            ptyProcess.write(`${line.trim()}\r`);
+            console.log(`[Main] 执行第 ${index + 1} 行: ${line.trim()}`);
+          }
+        }, 500 + index * 150); // 每行间隔150ms，避免命令粘连
+      });
     }
 
     return { success: true, pid: ptyProcess.pid };
@@ -887,13 +891,16 @@ ipcMain.handle('restore-terminal', (event, { id }) => {
       }
     });
     
-    // 重新执行脚本
+    // 重新执行脚本（逐行执行）
     if (terminalConfig.script && terminalConfig.script.trim()) {
-      setTimeout(() => {
-        if (terminals.has(id)) {
-          result.write(`${terminalConfig.script}\r`);
-        }
-      }, 500);
+      const lines = terminalConfig.script.split('\n').filter(line => line.trim());
+      lines.forEach((line, index) => {
+        setTimeout(() => {
+          if (terminals.has(id)) {
+            result.write(`${line.trim()}\r`);
+          }
+        }, 500 + index * 150);
+      });
     }
     
     console.log(`[Main] 终端 ${id} 手动恢复成功 (PID: ${result.pid})`);
