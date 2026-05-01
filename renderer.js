@@ -1,4 +1,4 @@
-﻿const { ipcRenderer } = require('electron');
+const { ipcRenderer } = require('electron');
 const { Terminal } = require('xterm');
 const { FitAddon } = require('xterm-addon-fit');
 
@@ -8,6 +8,7 @@ let activeTerminalId = null;
 let terminalCounter = 0;
 let shells = [];
 let templates = [];
+let quickReplyData = { groups: [], templates: [] };
 
 // 监控状态
 let monitorInterval = null;
@@ -66,6 +67,7 @@ async function init() {
 
   shells = await ipcRenderer.invoke('get-shells');
   templates = await ipcRenderer.invoke('get-templates');
+  quickReplyData = await ipcRenderer.invoke('get-quick-reply');
 
   console.log('[Renderer] Shell 预设:', shells);
   console.log('[Renderer] 模板:', templates);
@@ -865,13 +867,12 @@ function showEditTemplateModal(template) {
   editModal.querySelector('#closeEditModalBtn').addEventListener('click', () => { editModal.remove(); focusActiveTerminal(); });
   editModal.querySelector('#cancelEditBtn').addEventListener('click', () => { editModal.remove(); focusActiveTerminal(); });
   editModal.querySelector('#saveEditBtn').addEventListener('click', () => saveEditTemplate(template.id, editModal));
-  // 点击弹窗外部不关闭，必须点击确认或取消才关闭
-  // editModal.addEventListener('click', (e) => {
-  //   if (e.target === editModal) editModal.remove();
-  // });
 
   blurActiveTerminal();
-  requestAnimationFrame(() => editModal.classList.add('active'));
+  requestAnimationFrame(() => {
+    editModal.classList.add('active');
+    focusModalInput('#editTplName', editModal);
+  });
 }
 
 async function saveEditTemplate(id, modal) {
@@ -958,9 +959,23 @@ function getScriptPreview(script) {
 }
 
 function blurActiveTerminal() {
+  // 强制释放任何元素上的焦点
+  if (document.activeElement && document.activeElement !== document.body) {
+    document.activeElement.blur();
+    document.activeElement.dispatchEvent(new Event('blur', { bubbles: true }));
+  }
+  // 尝试通过 xterm API 释放
   if (activeTerminalId) {
     const term = terminals.get(activeTerminalId);
-    if (term) term.terminal.blur();
+    if (term) {
+      term.terminal.blur();
+      // 直接找到 xterm 内部 textarea 强制 blur
+      const wrapper = document.getElementById(`wrapper-${activeTerminalId}`);
+      if (wrapper) {
+        const ta = wrapper.querySelector('.xterm-helper-textarea');
+        if (ta) { ta.blur(); ta.readOnly = true; setTimeout(() => { ta.readOnly = false; }, 100); }
+      }
+    }
   }
 }
 
@@ -969,6 +984,52 @@ function focusActiveTerminal() {
     const term = terminals.get(activeTerminalId);
     if (term) term.terminal.focus();
   }
+}
+
+// 通用弹窗输入框聚焦助手（解决 Electron 焦点问题）
+async function focusModalInput(selector, root) {
+  const input = (root || document).querySelector(selector);
+  if (!input) return;
+
+  // 确保输入框完全可用（清除任何 disabled/readOnly 状态）
+  input.disabled = false;
+  input.readOnly = false;
+
+  // 让 overlay 可聚焦，防止焦点逃逸到底层
+  const overlay = (root || input).closest('.modal-overlay, .qr-modal-overlay');
+  if (overlay) {
+    overlay.setAttribute('tabindex', '-1');
+    overlay.style.outline = 'none';
+  }
+
+  // 计算输入框中心坐标（相对于 web contents），发给主进程用于 OS 级鼠标事件
+  const rect = input.getBoundingClientRect();
+  const coords = rect.width > 0 && rect.height > 0
+    ? { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) }
+    : null;
+
+  // 等待主进程完成 OS 级聚焦（blur→focus→置顶→模拟鼠标点击→恢复，约 280ms）
+  await ipcRenderer.invoke('focus-window', coords);
+
+  // 等待浏览器渲染完成
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+  // focus 尝试函数：直接攻克输入框，不做多余操作
+  const tryFocus = () => {
+    try {
+      input.focus({ preventScroll: true });
+      if (typeof input.select === 'function') input.select();
+      if (typeof input.setSelectionRange === 'function') {
+        input.setSelectionRange(input.value.length, input.value.length);
+      }
+    } catch (e) {}
+  };
+
+  tryFocus();
+  // 多次重试，应对冷启动时的渲染延迟
+  setTimeout(tryFocus, 60);
+  setTimeout(tryFocus, 200);
+  setTimeout(tryFocus, 500);
 }
 
 function showMainModal() {
@@ -988,15 +1049,7 @@ function hideMainModal() {
 function showCreateTemplateModal() {
   blurActiveTerminal();
   createTemplateModal.classList.add('active');
-  requestAnimationFrame(() => {
-    const nameInput = createTemplateModal.querySelector('#tplName');
-    if (nameInput) {
-      nameInput.focus();
-      console.log('[Renderer] 聚焦模板名称输入框');
-    } else {
-      console.error('[Renderer] 找不到模板名称输入框');
-    }
-  });
+  focusModalInput('#tplName');
 }
 function hideCreateTemplateModal() {
   createTemplateModal.classList.remove('active');
@@ -1099,27 +1152,8 @@ function renderTemplateGrid() {
 }
 
 function createTerminal(preset) {
-  // 检查是否已存在相同模板的终端（相同 shell + cwd + script）
-  const existingId = findExistingTerminal(preset);
-  if (existingId) {
-    // 已存在相同模板的终端，直接激活并聚焦
-    activateTerminal(existingId);
-    const term = terminals.get(existingId);
-    if (term) term.terminal.focus();
-    return;
-  }
+  // 允许同一模板创建多个终端实例
   openTerminal({ ...preset, skipActivate: false });
-}
-
-// 查找是否已存在相同模板的终端
-function findExistingTerminal(preset) {
-  for (const [id, term] of terminals) {
-    const p = term.preset;
-    if (p.shell === preset.shell && p.cwd === preset.cwd && (p.script || '') === (preset.script || '')) {
-      return id;
-    }
-  }
-  return null;
 }
 
 async function openTerminal(preset) {
@@ -1306,6 +1340,30 @@ async function openTerminal(preset) {
       menu.remove();
     });
     menu.appendChild(pasteItem);
+
+    // 添加到快速回复选项（仅当有选中内容时显示）
+    if (hasSelection) {
+      const addToQuickReplyItem = document.createElement('div');
+      addToQuickReplyItem.textContent = '💬 添加到快速回复';
+      addToQuickReplyItem.style.cssText = `
+        padding: 8px 16px;
+        cursor: pointer;
+        color: #cccccc;
+        font-size: 13px;
+      `;
+      addToQuickReplyItem.addEventListener('mouseenter', () => {
+        addToQuickReplyItem.style.background = '#0e639c';
+      });
+      addToQuickReplyItem.addEventListener('mouseleave', () => {
+        addToQuickReplyItem.style.background = 'transparent';
+      });
+      addToQuickReplyItem.addEventListener('click', () => {
+        menu.remove();
+        // 打开新建模板弹窗，预填充选中的内容
+        showAddTemplateModalWithContent(selection);
+      });
+      menu.appendChild(addToQuickReplyItem);
+    }
 
     // 全选选项
     const selectAllItem = document.createElement('div');
@@ -2020,4 +2078,592 @@ async function checkTerminalLimit() {
 }
 
 init();
+
+// ========== 快速回复功能 ==========
+let quickReplyBtn = null;
+let quickReplyPanel = null;
+let quickReplyVisible = false;
+
+// 创建悬浮按钮
+function createQuickReplyButton() {
+  quickReplyBtn = document.createElement('div');
+  quickReplyBtn.id = 'quickReplyBtn';
+  quickReplyBtn.innerHTML = '💬';
+  quickReplyBtn.title = '快速回复 (Ctrl+Shift+R)';
+  quickReplyBtn.addEventListener('click', toggleQuickReplyPanel);
+  document.body.appendChild(quickReplyBtn);
+  console.log('[Renderer] 快速回复按钮已创建');
+}
+
+// 切换面板显示
+function toggleQuickReplyPanel() {
+  if (quickReplyVisible) {
+    hideQuickReplyPanel();
+  } else {
+    showQuickReplyPanel();
+  }
+}
+
+// 显示面板
+function showQuickReplyPanel() {
+  blurActiveTerminal();
+  if (!quickReplyPanel) {
+    createQuickReplyPanel();
+  }
+  quickReplyPanel.style.display = 'block';
+  quickReplyVisible = true;
+
+  // 聚焦搜索框
+  focusModalInput('.qr-search-input');
+}
+
+// 隐藏面板
+function hideQuickReplyPanel() {
+  if (quickReplyPanel) {
+    quickReplyPanel.style.display = 'none';
+    quickReplyVisible = false;
+  }
+}
+
+// 创建快速回复面板
+function createQuickReplyPanel() {
+  quickReplyPanel = document.createElement('div');
+  quickReplyPanel.id = 'quickReplyPanel';
+  quickReplyPanel.className = 'quick-reply-panel';
+  quickReplyPanel.innerHTML = `
+    <div class="qr-header">
+      <div class="qr-search">
+        <input type="text" class="qr-search-input" placeholder="🔍 搜索快速回复..." id="qrSearchInput">
+      </div>
+      <div class="qr-actions">
+        <button class="qr-btn" id="qrAddGroupBtn" title="新建分组">📁 新建分组</button>
+        <button class="qr-btn" id="qrAddTemplateBtn" title="新建模板">➕ 新建模板</button>
+        <button class="qr-close" id="qrCloseBtn">✕</button>
+      </div>
+    </div>
+    <div class="qr-content" id="qrContent">
+      <!-- 分组和模板列表 -->
+    </div>
+  `;
+  document.body.appendChild(quickReplyPanel);
+
+  // 绑定事件
+  document.getElementById('qrCloseBtn').addEventListener('click', hideQuickReplyPanel);
+  document.getElementById('qrAddGroupBtn').addEventListener('click', () => showAddGroupModal());
+  document.getElementById('qrAddTemplateBtn').addEventListener('click', () => showAddTemplateModal());
+  document.getElementById('qrSearchInput').addEventListener('input', filterTemplates);
+
+  // 点击外部关闭
+  quickReplyPanel.addEventListener('click', (e) => {
+    if (e.target === quickReplyPanel) {
+      hideQuickReplyPanel();
+    }
+  });
+
+  // 渲染模板列表
+  renderQuickReplyList();
+  console.log('[Renderer] 快速回复面板已创建');
+}
+
+// 渲染模板列表
+function renderQuickReplyList(filterText = '') {
+  const content = document.getElementById('qrContent');
+  if (!content) return;
+
+  const { groups, templates } = quickReplyData;
+  const filter = (filterText || '').toLowerCase();
+
+  let html = '';
+
+  // ── 常用模板置顶区 ──
+  const favorites = templates
+    .filter(t => t.shortcut !== null && t.shortcut !== undefined)
+    .sort((a, b) => a.shortcut - b.shortcut);
+
+  html += '<div class="qr-favorites">';
+  html += '<div class="qr-favorites-label">🔥 常用模板</div>';
+  html += '<div class="qr-favorites-row">';
+
+  for (let i = 1; i <= 6; i++) {
+    const fav = favorites.find(t => t.shortcut === i);
+    if (fav && (!filter || (fav.name || '').toLowerCase().includes(filter) || (fav.content || '').toLowerCase().includes(filter))) {
+      html += `
+        <div class="qr-favorite-card" data-template-id="${fav.id}" onclick="useTemplate('${fav.id}')" title="${fav.name}">
+          <span class="qr-favorite-shortcut">Ctrl+${i}</span>
+          <span class="qr-favorite-icon">${fav.icon || '📝'}</span>
+          <span class="qr-favorite-name">${fav.name}</span>
+          <span class="qr-favorite-submit ${fav.autoSubmit ? 'auto' : 'manual'}">${fav.autoSubmit ? '↵' : '手'}</span>
+        </div>`;
+    } else {
+      html += `
+        <div class="qr-favorite-card qr-favorite-empty">
+          <span class="qr-favorite-shortcut">Ctrl+${i}</span>
+          <span class="qr-favorite-placeholder">+</span>
+        </div>`;
+    }
+  }
+
+  html += '</div></div>';
+
+  // ── 分组列表 ──
+  if (groups.length === 0 && favorites.length === 0) {
+    html += `
+      <div class="qr-empty">
+        <div class="qr-empty-icon">📝</div>
+        <div class="qr-empty-text">还没有快速回复模板</div>
+        <div class="qr-empty-hint">点击上方按钮创建</div>
+      </div>
+    `;
+    content.innerHTML = html;
+    return;
+  }
+
+  const filteredGroupsHtml = [];
+  groups.sort((a, b) => (a.order || 0) - (b.order || 0)).forEach(group => {
+    const groupTemplates = templates
+      .filter(t => t.groupId === group.id)
+      .filter(t => !filter || (t.name || '').toLowerCase().includes(filter) || (t.content || '').toLowerCase().includes(filter))
+      .sort((a, b) => (a.order || 0) - (b.order || 0));
+
+    if (filter && groupTemplates.length === 0) return;
+
+    let groupHtml = `
+      <div class="qr-group" data-group-id="${group.id}">
+        <div class="qr-group-header" onclick="toggleGroup('${group.id}')">
+          <span class="qr-group-icon">${group.icon || '📁'}</span>
+          <span class="qr-group-name">${group.name}</span>
+          <span class="qr-group-count">${groupTemplates.length}</span>
+          <span class="qr-group-toggle">${group.collapsed ? '▶' : '▼'}</span>
+        </div>
+        <div class="qr-group-templates" style="display: ${group.collapsed ? 'none' : 'block'}">
+          ${groupTemplates.map(t => {
+            const isFavorite = t.shortcut !== null && t.shortcut !== undefined;
+            const shortcutBadge = isFavorite
+              ? `<span class="qr-shortcut qr-shortcut-active" title="常用快捷键 Ctrl+${t.shortcut}">⭐</span>`
+              : '';
+            return `
+            <div class="qr-template" data-template-id="${t.id}" onclick="useTemplate('${t.id}')">
+              ${shortcutBadge}
+              <span class="qr-template-icon">${t.icon || '📝'}</span>
+              <div class="qr-template-info">
+                <div class="qr-template-name">${t.name}</div>
+                <div class="qr-template-preview">${getTemplatePreview(t.content)}</div>
+              </div>
+              <span class="qr-template-submit ${t.autoSubmit ? 'auto' : 'manual'}">${t.autoSubmit ? '↵' : '手'}</span>
+              <div class="qr-template-actions">
+                <button class="qr-action-btn" onclick="event.stopPropagation(); editTemplate('${t.id}')" title="编辑">✏️</button>
+                <button class="qr-action-btn" onclick="event.stopPropagation(); deleteTemplate('${t.id}')" title="删除">🗑️</button>
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+    `;
+    filteredGroupsHtml.push(groupHtml);
+  });
+
+  html += filteredGroupsHtml.join('') || (filter ? `
+    <div class="qr-empty">
+      <div class="qr-empty-icon">🔍</div>
+      <div class="qr-empty-text">没有找到匹配的模板</div>
+    </div>
+  ` : '');
+
+  content.innerHTML = html;
+}
+
+// 获取常用模板列表（按 shortcut 排序）
+function getFavoriteTemplates() {
+  return quickReplyData.templates
+    .filter(t => t.shortcut !== null && t.shortcut !== undefined)
+    .sort((a, b) => a.shortcut - b.shortcut);
+}
+
+// 获取模板预览文本
+function getTemplatePreview(content) {
+  if (!content) return '';
+  const lines = content.trim().split('\n');
+  if (lines.length === 1) {
+    return content.length > 30 ? content.substring(0, 30) + '...' : content;
+  }
+  return `${lines[0]} ... (${lines.length}行)`;
+}
+
+// 切换分组展开/折叠
+window.toggleGroup = function(groupId) {
+  const group = quickReplyData.groups.find(g => g.id === groupId);
+  if (group) {
+    group.collapsed = !group.collapsed;
+    renderQuickReplyList();
+  }
+};
+
+// 使用模板
+window.useTemplate = function(templateId) {
+  const template = quickReplyData.templates.find(t => t.id === templateId);
+  if (!template) return;
+
+  const term = terminals.get(activeTerminalId);
+  if (!term) {
+    alert('请先选择一个终端');
+    return;
+  }
+
+  // 写入内容
+  const content = template.content || '';
+  ipcRenderer.invoke('write-terminal', { id: term.ptyId, data: content });
+
+  // 如果自动提交，添加回车
+  if (template.autoSubmit) {
+    setTimeout(() => {
+      ipcRenderer.invoke('write-terminal', { id: term.ptyId, data: '\r' });
+    }, 50);
+  }
+
+  // 隐藏面板
+  hideQuickReplyPanel();
+  console.log('[Renderer] 使用快速回复模板:', template.name);
+};
+
+// 编辑模板
+window.editTemplate = function(templateId) {
+  const template = quickReplyData.templates.find(t => t.id === templateId);
+  if (!template) return;
+
+  showAddTemplateModal(template);
+};
+
+// 删除模板
+window.deleteTemplate = function(templateId) {
+  if (!confirm('确定要删除这个模板吗？')) return;
+
+  quickReplyData.templates = quickReplyData.templates.filter(t => t.id !== templateId);
+  ipcRenderer.invoke('save-quick-reply', quickReplyData);
+  renderQuickReplyList();
+};
+
+// 搜索过滤
+function filterTemplates() {
+  const searchText = document.getElementById('qrSearchInput')?.value || '';
+  renderQuickReplyList(searchText);
+}
+
+// 显示新建分组弹窗
+function showAddGroupModal(existingGroup = null) {
+  const isEdit = !!existingGroup;
+  blurActiveTerminal();
+  const modal = document.createElement('div');
+  modal.className = 'qr-modal-overlay';
+  modal.innerHTML = `
+    <div class="qr-modal">
+      <div class="qr-modal-header">
+        <h3>${isEdit ? '编辑分组' : '新建分组'}</h3>
+      </div>
+      <div class="qr-modal-body">
+        <div class="qr-form-group">
+          <label>分组名称</label>
+          <input type="text" id="qrGroupName" value="${existingGroup?.name || ''}" placeholder="输入分组名称">
+        </div>
+        <div class="qr-form-group">
+          <label>图标</label>
+          <input type="text" id="qrGroupIcon" value="${existingGroup?.icon || '📁'}" placeholder="输入图标">
+        </div>
+      </div>
+      <div class="qr-modal-footer">
+        <button class="qr-btn" id="qrGroupCancelBtn">取消</button>
+        <button class="qr-btn qr-btn-primary" id="qrGroupSaveBtn">保存</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  focusModalInput('#qrGroupName', modal);
+
+  document.getElementById('qrGroupCancelBtn').addEventListener('click', () => modal.remove());
+  document.getElementById('qrGroupSaveBtn').addEventListener('click', () => {
+    const name = document.getElementById('qrGroupName').value.trim();
+    const icon = document.getElementById('qrGroupIcon').value.trim() || '📁';
+    if (!name) {
+      alert('请输入分组名称');
+      return;
+    }
+    if (isEdit) {
+      const group = quickReplyData.groups.find(g => g.id === existingGroup.id);
+      if (group) {
+        group.name = name;
+        group.icon = icon;
+      }
+    } else {
+      quickReplyData.groups.push({
+        id: 'grp-' + Date.now(),
+        name,
+        icon,
+        collapsed: false,
+        order: quickReplyData.groups.length + 1
+      });
+    }
+    ipcRenderer.invoke('save-quick-reply', quickReplyData);
+    renderQuickReplyList();
+    modal.remove();
+  });
+}
+
+// 显示新建模板弹窗
+function showAddTemplateModal(existingTemplate = null) {
+  const isEdit = !!existingTemplate;
+  const groups = quickReplyData.groups;
+  blurActiveTerminal();
+
+  const modal = document.createElement('div');
+  modal.className = 'qr-modal-overlay';
+  modal.innerHTML = `
+    <div class="qr-modal qr-modal-large">
+      <div class="qr-modal-header">
+        <h3>${isEdit ? '编辑模板' : '新建模板'}</h3>
+      </div>
+      <div class="qr-modal-body">
+        <div class="qr-form-row">
+          <div class="qr-form-group">
+            <label>模板名称</label>
+            <input type="text" id="qrTemplateName" value="${existingTemplate?.name || ''}" placeholder="输入模板名称">
+          </div>
+          <div class="qr-form-group" style="width: 80px;">
+            <label>图标</label>
+            <input type="text" id="qrTemplateIcon" value="${existingTemplate?.icon || '📝'}" placeholder="图标">
+          </div>
+        </div>
+        <div class="qr-form-group">
+          <label>所属分组</label>
+          <select id="qrTemplateGroup">
+            ${groups.map(g => `<option value="${g.id}" ${existingTemplate?.groupId === g.id ? 'selected' : ''}>${g.icon} ${g.name}</option>`).join('')}
+          </select>
+        </div>
+        <div class="qr-form-group">
+          <label>内容（支持多行脚本）</label>
+          <textarea id="qrTemplateContent" rows="5" placeholder="输入要发送的内容，多行会按行发送">${existingTemplate?.content || ''}</textarea>
+        </div>
+        <div class="qr-form-row">
+          <div class="qr-form-group">
+            <label>常用快捷键</label>
+            <select id="qrTemplateShortcut">
+              <option value="">无</option>
+              ${[1,2,3,4,5,6].map(n => `<option value="${n}" ${existingTemplate?.shortcut === n ? 'selected' : ''}>Ctrl+${n}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="qr-form-group">
+          <label class="qr-checkbox-label">
+            <input type="checkbox" id="qrTemplateAutoSubmit" ${existingTemplate?.autoSubmit !== false ? 'checked' : ''}>
+            <span>自动回车确认（发送后自动按回车）</span>
+          </label>
+        </div>
+      </div>
+      <div class="qr-modal-footer">
+        <button class="qr-btn" id="qrTemplateCancelBtn">取消</button>
+        <button class="qr-btn qr-btn-primary" id="qrTemplateSaveBtn">保存</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  focusModalInput('#qrTemplateName', modal);
+
+  document.getElementById('qrTemplateCancelBtn').addEventListener('click', () => modal.remove());
+  document.getElementById('qrTemplateSaveBtn').addEventListener('click', () => {
+    const name = document.getElementById('qrTemplateName').value.trim();
+    const icon = document.getElementById('qrTemplateIcon').value.trim() || '📝';
+    const groupId = document.getElementById('qrTemplateGroup').value;
+    const content = document.getElementById('qrTemplateContent').value;
+    const autoSubmit = document.getElementById('qrTemplateAutoSubmit').checked;
+    const shortcutVal = document.getElementById('qrTemplateShortcut').value;
+    const shortcutNum = shortcutVal ? parseInt(shortcutVal) : null;
+
+    if (!name) {
+      alert('请输入模板名称');
+      return;
+    }
+    if (!content) {
+      alert('请输入模板内容');
+      return;
+    }
+
+    // 快捷键冲突处理：如果被其他模板占用，直接覆盖
+    if (shortcutNum) {
+      const conflictId = isEdit ? existingTemplate.id : null;
+      const conflicted = quickReplyData.templates.find(t => t.id !== conflictId && t.shortcut === shortcutNum);
+      if (conflicted) {
+        conflicted.shortcut = null;
+      }
+    }
+
+    if (isEdit) {
+      const template = quickReplyData.templates.find(t => t.id === existingTemplate.id);
+      if (template) {
+        template.name = name;
+        template.icon = icon;
+        template.groupId = groupId;
+        template.content = content;
+        template.autoSubmit = autoSubmit;
+        template.shortcut = shortcutNum;
+      }
+    } else {
+      const groupTemplates = quickReplyData.templates.filter(t => t.groupId === groupId);
+      quickReplyData.templates.push({
+        id: 'qr-' + Date.now(),
+        name,
+        icon,
+        groupId,
+        content,
+        autoSubmit,
+        shortcut: null,
+        order: groupTemplates.length + 1
+      });
+    }
+
+    ipcRenderer.invoke('save-quick-reply', quickReplyData);
+    renderQuickReplyList();
+    modal.remove();
+  });
+}
+
+// 显示新建模板弹窗（预填充内容）
+function showAddTemplateModalWithContent(content) {
+  const groups = quickReplyData.groups;
+
+  // 如果没有分组，先创建默认分组
+  if (groups.length === 0) {
+    groups.push({
+      id: 'grp-default',
+      name: '默认分组',
+      icon: '📁',
+      collapsed: false,
+      order: 1
+    });
+    ipcRenderer.invoke('save-quick-reply', quickReplyData);
+  }
+
+  const modal = document.createElement('div');
+  blurActiveTerminal();
+  modal.className = 'qr-modal-overlay';
+  modal.innerHTML = `
+    <div class="qr-modal qr-modal-large">
+      <div class="qr-modal-header">
+        <h3>添加到快速回复</h3>
+      </div>
+      <div class="qr-modal-body">
+        <div class="qr-form-row">
+          <div class="qr-form-group">
+            <label>模板名称</label>
+            <input type="text" id="qrTemplateName" placeholder="输入模板名称" value="${content.substring(0, 20)}">
+          </div>
+          <div class="qr-form-group" style="width: 80px;">
+            <label>图标</label>
+            <input type="text" id="qrTemplateIcon" value="📝" placeholder="图标">
+          </div>
+        </div>
+        <div class="qr-form-group">
+          <label>所属分组</label>
+          <select id="qrTemplateGroup">
+            ${groups.map(g => `<option value="${g.id}">${g.icon} ${g.name}</option>`).join('')}
+          </select>
+        </div>
+        <div class="qr-form-group">
+          <label>内容（支持多行脚本）</label>
+          <textarea id="qrTemplateContent" rows="5" placeholder="输入要发送的内容">${content.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</textarea>
+        </div>
+        <div class="qr-form-row">
+          <div class="qr-form-group">
+            <label>常用快捷键</label>
+            <select id="qrTemplateShortcut">
+              <option value="">无</option>
+              ${[1,2,3,4,5,6].map(n => `<option value="${n}">Ctrl+${n}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="qr-form-group">
+          <label class="qr-checkbox-label">
+            <input type="checkbox" id="qrTemplateAutoSubmit" checked>
+            <span>自动回车确认（发送后自动按回车）</span>
+          </label>
+        </div>
+      </div>
+      <div class="qr-modal-footer">
+        <button class="qr-btn" id="qrTemplateCancelBtn">取消</button>
+        <button class="qr-btn qr-btn-primary" id="qrTemplateSaveBtn">保存</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  focusModalInput('#qrTemplateName', modal);
+
+  document.getElementById('qrTemplateCancelBtn').addEventListener('click', () => modal.remove());
+  document.getElementById('qrTemplateSaveBtn').addEventListener('click', () => {
+    const name = document.getElementById('qrTemplateName').value.trim();
+    const icon = document.getElementById('qrTemplateIcon').value.trim() || '📝';
+    const groupId = document.getElementById('qrTemplateGroup').value;
+    const templateContent = document.getElementById('qrTemplateContent').value;
+    const autoSubmit = document.getElementById('qrTemplateAutoSubmit').checked;
+    const shortcutVal = document.getElementById('qrTemplateShortcut').value;
+    const shortcutNum = shortcutVal ? parseInt(shortcutVal) : null;
+
+    if (!name) {
+      alert('请输入模板名称');
+      return;
+    }
+    if (!templateContent) {
+      alert('请输入模板内容');
+      return;
+    }
+
+    // 快捷键冲突处理：如果被其他模板占用，直接覆盖
+    if (shortcutNum) {
+      const conflicted = quickReplyData.templates.find(t => t.shortcut === shortcutNum);
+      if (conflicted) {
+        conflicted.shortcut = null;
+      }
+    }
+
+    const groupTemplates = quickReplyData.templates.filter(t => t.groupId === groupId);
+    quickReplyData.templates.push({
+      id: 'qr-' + Date.now(),
+      name,
+      icon,
+      groupId,
+      content: templateContent,
+      autoSubmit,
+      shortcut: shortcutNum,
+      order: groupTemplates.length + 1
+    });
+
+    ipcRenderer.invoke('save-quick-reply', quickReplyData);
+    renderQuickReplyList();
+    modal.remove();
+
+    // 提示用户
+    console.log('[Renderer] 已添加到快速回复:', name);
+  });
+}
+
+// 注册全局快捷键
+document.addEventListener('keydown', (e) => {
+  // Ctrl+Shift+R 切换快速回复面板
+  if (e.ctrlKey && e.shiftKey && e.key === 'R') {
+    e.preventDefault();
+    toggleQuickReplyPanel();
+  }
+  // Escape 关闭面板
+  if (e.key === 'Escape' && quickReplyVisible) {
+    hideQuickReplyPanel();
+  }
+  // Ctrl+1~6 直接发送常用模板
+  if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key >= '1' && e.key <= '6') {
+    const shortcutNum = parseInt(e.key);
+    const template = quickReplyData.templates.find(t => t.shortcut === shortcutNum);
+    if (template) {
+      e.preventDefault();
+      window.useTemplate(template.id);
+    }
+  }
+});
+
+// 创建悬浮按钮
+createQuickReplyButton();
 
