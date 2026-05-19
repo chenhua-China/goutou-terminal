@@ -1,6 +1,6 @@
 const { ipcRenderer } = require('electron');
-const { Terminal } = require('xterm');
-const { FitAddon } = require('xterm-addon-fit');
+const { Terminal } = require('@xterm/xterm');
+const { FitAddon } = require('@xterm/addon-fit');
 
 // 状态管理
 let terminals = new Map();
@@ -1202,7 +1202,11 @@ async function openTerminal(preset) {
     altClickMovesCursor: true,
     // 启用 IME 支持(中文输入)
     overviewRulerWidth: 0,
+    // 启用 proposed API（解决 "You must set the allowProposedApi option to true" 错误）
+    allowProposedApi: true,
   });
+
+  // xterm.js v6 默认已能正确处理 emoji 宽度，无需自定义 unicode provider
 
   const fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
@@ -1421,10 +1425,18 @@ async function openTerminal(preset) {
     rows: dims?.rows || 24,
     name: displayName,
     icon: preset.icon,
+    restore: isRestore,
   });
 
   if (!result.success) {
     terminal.writeln(`\x1b[31m错误:${result.error}\x1b[0m`);
+    // 显示弹窗提示用户
+    alert(`❌ 创建终端失败\n\n${result.error}`);
+    // 清理终端 UI（因为 PTY 创建失败）
+    const wrapper = document.getElementById(`wrapper-${id}`);
+    if (wrapper) wrapper.remove();
+    terminals.delete(id);
+    return null;
   } else {
     if (isRestore) {
       terminal.writeln(`\x1b[32m✓ 已恢复:${displayName}\x1b[0m`);
@@ -1675,6 +1687,17 @@ function setupTerminalKeyHandler(terminal, ptyId) {
         console.error('[Renderer] 粘贴失败:', err);
       });
       return false;
+    }
+    // Ctrl+1~6 直接发送常用模板（终端焦点状态下也能触发）
+    if (event.ctrlKey && !event.shiftKey && !event.altKey && event.type === 'keydown') {
+      const keyNum = parseInt(event.key);
+      if (keyNum >= 1 && keyNum <= 6) {
+        const template = quickReplyData.templates.find(t => t.shortcut === keyNum);
+        if (template) {
+          window.useTemplate(template.id);
+          return false;
+        }
+      }
     }
     return true;
   });
@@ -2513,7 +2536,7 @@ function showAddTemplateModal(existingTemplate = null) {
         groupId,
         content,
         autoSubmit,
-        shortcut: null,
+        shortcut: shortcutNum,
         order: groupTemplates.length + 1
       });
     }
@@ -2655,6 +2678,8 @@ document.addEventListener('keydown', (e) => {
   }
   // Ctrl+1~6 直接发送常用模板
   if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key >= '1' && e.key <= '6') {
+    // 如果事件已经被处理（来自终端处理器），跳过
+    if (e.defaultPrevented) return;
     const shortcutNum = parseInt(e.key);
     const template = quickReplyData.templates.find(t => t.shortcut === shortcutNum);
     if (template) {

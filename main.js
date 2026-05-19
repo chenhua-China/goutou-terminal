@@ -508,9 +508,21 @@ function getFullUserEnv() {
 }
 
 ipcMain.handle('create-terminal', async (event, options) => {
-  const { cwd, shell, id, script, cols, rows, name, icon } = options;
+  const { cwd, shell, id, script, cols, rows, name, icon, restore } = options;
   
-  console.log(`[Main] 创建终端：id=${id}, shell=${shell}, cwd=${cwd}`);
+  // 检查工作目录是否存在（恢复会话时不检查，直接使用默认目录）
+  let actualCwd = cwd;
+  if (!restore && cwd && !fs.existsSync(cwd)) {
+    console.log(`[Main] 工作目录不存在: ${cwd}`);
+    return { success: false, error: `工作目录不存在：${cwd}\n请修改模板配置或创建该目录` };
+  }
+  
+  // 如果没有指定目录，或者恢复会话时目录不存在，使用默认目录
+  if (!actualCwd || (restore && cwd && !fs.existsSync(cwd))) {
+    actualCwd = process.env.USERPROFILE || os.homedir();
+  }
+  
+  console.log(`[Main] 创建终端：id=${id}, shell=${shell}, cwd=${actualCwd}, restore=${restore}`);
   
   // 检查终端数量限制
   if (terminals.size >= MAX_TERMINALS) {
@@ -683,7 +695,7 @@ ipcMain.handle('create-terminal', async (event, options) => {
       name: 'xterm-256color',
       cols: cols || 80,
       rows: rows || 24,
-      cwd: cwd || process.env.USERPROFILE,
+      cwd: actualCwd,
       env: env,
       useConpty: true,
       conptyInheritCursor: true,
@@ -701,7 +713,7 @@ ipcMain.handle('create-terminal', async (event, options) => {
     }
 
     // 保存终端用户数据
-    ptyProcess.userData = { shell, cwd, script, name, icon };
+    ptyProcess.userData = { shell, cwd: actualCwd, script, name, icon };
 
     terminals.set(id, ptyProcess);
 
