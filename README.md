@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Electron](https://img.shields.io/badge/Electron-41.2.1-blue.svg)](https://electronjs.org)
-[![xterm.js](https://img.shields.io/badge/xterm.js-5.3.0-green.svg)](https://xtermjs.org)
+[![xterm.js](https://img.shields.io/badge/xterm.js-6.0.0-green.svg)](https://xtermjs.org)
 [![node-pty](https://img.shields.io/badge/node--pty-1.1.0-orange.svg)](https://github.com/microsoft/node-pty)
 
 ## ✨ Features
@@ -16,7 +16,8 @@
 - 📝 **Alias Display** - Shows alias (original name) 📁 directory in top bar
 - 🖥️ **Live Status** - Real-time terminal count indicator in the top bar
 - 🎨 **Dark Theme** - VS Code-inspired dark theme
-- ⌨️ **Keyboard Shortcuts** - `Ctrl+T` new terminal, `Ctrl+W` close, `Ctrl+Shift+C/V` copy/paste
+- ⌨️ **Keyboard Shortcuts** - `Ctrl+T` new terminal, `Ctrl+W` close, `Ctrl+Shift+C/V` copy/paste, `Ctrl+1~6` quick reply
+- 💬 **Quick Reply** - Create quick reply templates with shortcuts (Ctrl+1~6) for fast input
 - 📋 **Right-Click Menu** - Copy, paste, select all, and edit alias
 - 💾 **Session Persistence** - Sessions saved and restored across app restarts
 - 🛡️ **Health Monitoring** - Terminal count, memory usage, and health status
@@ -25,7 +26,7 @@
 
 Download the latest Windows installer from the `dist/` directory:
 
-- [Windows Installer (x64)](https://github.com/chenhua-China/goutou-terminal/raw/master/dist/goutou-terminal-setup-1.0.0.exe)
+- [Windows Installer (x64)](https://github.com/chenhua-China/goutou-terminal/releases/download/v1.1.0/goutou-terminal.Setup.1.1.0.exe)
 
 ## 🚀 Quick Start
 
@@ -84,6 +85,8 @@ The installer will be generated in `dist/` directory.
 | `Ctrl+Shift+C` | Copy selected text |
 | `Ctrl+Shift+V` | Paste text |
 | `F5` | Refresh terminal input |
+| `Ctrl+1~6` | Quick reply (send preset content) |
+| `Ctrl+Shift+R` | Toggle quick reply panel |
 
 ## 📁 Project Structure
 
@@ -96,7 +99,6 @@ goutou-terminal/
 ├── package.json         # Project configuration
 ├── templates.json       # Default terminal templates
 └── dist/                # Build output (installers)
-    └── goutou-terminal-setup-1.0.0.exe
 ```
 
 ## 🔧 Technical Details
@@ -112,9 +114,9 @@ goutou-terminal/
 | Package | Version | Purpose |
 |---------|---------|---------|
 | electron | 41.2.1 | Desktop app framework |
-| xterm | 5.3.0 | Terminal emulator |
-| xterm-addon-fit | 0.8.0 | Auto-fit terminal to container |
-| xterm-addon-web-links | 0.9.0 | Clickable links in terminal |
+| @xterm/xterm | 6.0.0 | Terminal emulator |
+| @xterm/addon-fit | 0.11.0 | Auto-fit terminal to container |
+| @xterm/addon-web-links | 0.12.0 | Clickable links in terminal |
 | node-pty | 1.1.0 | Native PTY for Windows |
 | electron-builder | 24.13.3 | Packaging and distribution |
 
@@ -122,6 +124,8 @@ goutou-terminal/
 
 Sessions are stored in the Electron user data directory:
 - **Windows**: `%APPDATA%/goutou-terminal/session.json`
+- **Templates**: `%APPDATA%/goutou-terminal/templates.json`
+- **Quick Reply**: `%APPDATA%/goutou-terminal/quick-reply.json`
 
 ## 📝 License
 
@@ -140,6 +144,28 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## 🐛 Issues
 
 Found a bug? Have a feature request? [Open an issue](https://github.com/chenhua-China/goutou-terminal/issues)
+
+## 📜 Changelog
+
+### v1.1.0 (2026-05-20)
+
+- **升级 xterm.js 到 v6** - 使用新的包名 `@xterm/xterm`、`@xterm/addon-fit`、`@xterm/addon-web-links`
+- **修复快捷回复快捷键保存问题** - 创建新快捷回复时快捷键现在能正确保存
+- **修复工作目录检查** - 目录不存在时显示错误提示，而不是静默使用默认目录
+- **优化恢复会话模式** - 恢复会话时如果原目录不存在，静默使用默认目录
+- **修复 xterm.css 导入路径**
+- **修复 `allowProposedApi` 缺失导致的错误**
+- **移除自定义 unicode provider** - v6 默认支持 emoji 宽度
+- **productName 改为 `goutou-terminal`** - 保持 userData 路径一致
+
+### v1.0.0 (Initial Release)
+
+- 多终端会话管理
+- 会话别名功能
+- 模板系统
+- 自动恢复会话
+- 快捷回复功能
+- 深色主题
 
 ---
 
