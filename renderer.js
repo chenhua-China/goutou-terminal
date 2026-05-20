@@ -1,6 +1,7 @@
 const { ipcRenderer } = require('electron');
 const { Terminal } = require('@xterm/xterm');
 const { FitAddon } = require('@xterm/addon-fit');
+const { Unicode11Addon } = require('@xterm/addon-unicode11');
 
 // 状态管理
 let terminals = new Map();
@@ -139,10 +140,12 @@ async function init() {
         // 同步 PTY 尺寸
         const dims = term.fitAddon.proposeDimensions();
         if (dims && dims.cols && dims.rows) {
+          const safeCols = Math.max(20, Math.min(dims.cols, 500));
+          const safeRows = Math.max(5, Math.min(dims.rows, 200));
           ipcRenderer.invoke('resize-terminal', {
             id: term.ptyId,
-            cols: dims.cols,
-            rows: dims.rows
+            cols: safeCols,
+            rows: safeRows
           });
         }
       } catch (e) {
@@ -1206,17 +1209,23 @@ async function openTerminal(preset) {
     allowProposedApi: true,
   });
 
-  // xterm.js v6 默认已能正确处理 emoji 宽度，无需自定义 unicode provider
+  // Unicode11 addon 帮助正确处理 emoji 等宽字符的宽度
 
   const fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
 
+  const unicodeAddon = new Unicode11Addon();
+  terminal.loadAddon(unicodeAddon);
+  terminal.unicode.activeVersion = '11';
+
   // 监听 xterm 尺寸变化,同步 PTY
   terminal.onResize(({ cols, rows }) => {
+    const safeCols = Math.max(20, Math.min(cols, 500));
+    const safeRows = Math.max(5, Math.min(rows, 200));
     ipcRenderer.invoke('resize-terminal', {
       id: ptyId,
-      cols,
-      rows
+      cols: safeCols,
+      rows: safeRows
     });
   });
 
@@ -1478,15 +1487,31 @@ async function openTerminal(preset) {
   window.addEventListener('resize', () => {
     if (activeTerminalId === id) {
       clearTimeout(resizeTimeout);
-      resizeTimeout = setTimeout(() => {
-        fitAddon.fit();
-        const newDims = fitAddon.proposeDimensions();
-        if (newDims && newDims.cols && newDims.rows) {
-          ipcRenderer.invoke('resize-terminal', {
-            id: ptyId,
-            cols: newDims.cols,
-            rows: newDims.rows
-          });
+      resizeTimeout = setTimeout(async () => {
+        try {
+          // 检查容器是否可见且有合理尺寸
+          const wrapperRect = wrapper.getBoundingClientRect();
+          if (wrapperRect.width < 100 || wrapperRect.height < 50) {
+            // 容器太小，跳过 resize
+            return;
+          }
+          fitAddon.fit();
+          const newDims = fitAddon.proposeDimensions();
+          // 最小安全尺寸: 至少 20 列 5 行，防止 PTY 崩溃
+          const safeCols = Math.max(20, Math.min(newDims.cols || 80, 500));
+          const safeRows = Math.max(5, Math.min(newDims.rows || 24, 200));
+          if (safeCols > 0 && safeRows > 0) {
+            const result = await ipcRenderer.invoke('resize-terminal', {
+              id: ptyId,
+              cols: safeCols,
+              rows: safeRows
+            });
+            if (!result.success) {
+              console.error('[Renderer] resize-terminal 失败:', result.error);
+            }
+          }
+        } catch (e) {
+          console.error('[Renderer] resize 处理失败:', e.message);
         }
       }, 150);
     }
@@ -2051,10 +2076,12 @@ function optimizeTerminalSwitch(id) {
           term.fitAddon.fit();
           const dims = term.fitAddon.proposeDimensions();
           if (dims && dims.cols && dims.rows) {
+            const safeCols = Math.max(20, Math.min(dims.cols, 500));
+            const safeRows = Math.max(5, Math.min(dims.rows, 200));
             ipcRenderer.invoke('resize-terminal', {
               id: term.ptyId,
-              cols: dims.cols,
-              rows: dims.rows
+              cols: safeCols,
+              rows: safeRows
             });
           }
         } catch (e) {

@@ -767,9 +767,16 @@ ipcMain.handle('resize-terminal', (event, { id, cols, rows }) => {
   const ptyProcess = terminals.get(id);
   if (ptyProcess) {
     try {
-      ptyProcess.resize(cols, rows);
-      return { success: true };
+      // 强制最小安全尺寸，防止 PTY 崩溃
+      const safeCols = Math.max(20, Math.min(Math.floor(cols), 500));
+      const safeRows = Math.max(5, Math.min(Math.floor(rows), 200));
+      if (!ptyProcess.killed && safeCols > 0 && safeRows > 0) {
+        ptyProcess.resize(safeCols, safeRows);
+        return { success: true };
+      }
+      return { success: false, error: 'Invalid dimensions or process killed' };
     } catch (e) {
+      console.error('[Main] resize-terminal 异常:', e.message);
       return { success: false, error: e.message };
     }
   }
