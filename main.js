@@ -233,6 +233,30 @@ function createWindow() {
     console.log('[Main] 窗口获得焦点');
   });
 
+  mainWindow.on('minimize', () => {
+    console.log('[Main] 窗口最小化');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window-minimized');
+    }
+  });
+
+  mainWindow.on('restore', () => {
+    console.log('[Main] 窗口恢复');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window-restored');
+    }
+  });
+
+  mainWindow.on('resize', () => {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isMinimized()) {
+      const [width, height] = mainWindow.getContentSize();
+      // 窗口内容区域太小时不触发 resize，避免 PTY 崩溃
+      if (width >= 200 && height >= 100) {
+        mainWindow.webContents.send('window-resized');
+      }
+    }
+  });
+
   mainWindow.on('close', (e) => {
     // 有终端运行时，显示二次确认
     if (terminals.size > 0) {

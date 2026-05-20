@@ -1482,9 +1482,39 @@ async function openTerminal(preset) {
     });
   }
 
-  // 窗口 resize 时调整终端大小
+  // 窗口 resize 时调整终端大小（通过主进程事件，避免最小化时触发）
   let resizeTimeout;
-  window.addEventListener('resize', () => {
+  let isWindowMinimized = false;
+
+  ipcRenderer.on('window-minimized', () => {
+    isWindowMinimized = true;
+    clearTimeout(resizeTimeout);
+  });
+
+  ipcRenderer.on('window-restored', () => {
+    isWindowMinimized = false;
+    // 恢复后延迟 resize，确保布局已完成
+    setTimeout(() => {
+      if (activeTerminalId === id) {
+        try {
+          fitAddon.fit();
+          const newDims = fitAddon.proposeDimensions();
+          const safeCols = Math.max(20, Math.min(newDims.cols || 80, 500));
+          const safeRows = Math.max(5, Math.min(newDims.rows || 24, 200));
+          ipcRenderer.invoke('resize-terminal', {
+            id: ptyId,
+            cols: safeCols,
+            rows: safeRows
+          });
+        } catch (e) {
+          console.error('[Renderer] 恢复后 resize 失败:', e.message);
+        }
+      }
+    }, 200);
+  });
+
+  ipcRenderer.on('window-resized', () => {
+    if (isWindowMinimized) return;
     if (activeTerminalId === id) {
       clearTimeout(resizeTimeout);
       resizeTimeout = setTimeout(async () => {
@@ -1492,12 +1522,10 @@ async function openTerminal(preset) {
           // 检查容器是否可见且有合理尺寸
           const wrapperRect = wrapper.getBoundingClientRect();
           if (wrapperRect.width < 100 || wrapperRect.height < 50) {
-            // 容器太小，跳过 resize
             return;
           }
           fitAddon.fit();
           const newDims = fitAddon.proposeDimensions();
-          // 最小安全尺寸: 至少 20 列 5 行，防止 PTY 崩溃
           const safeCols = Math.max(20, Math.min(newDims.cols || 80, 500));
           const safeRows = Math.max(5, Math.min(newDims.rows || 24, 200));
           if (safeCols > 0 && safeRows > 0) {
@@ -1687,6 +1715,8 @@ async function editSessionAlias(id) {
 }
 
 // 设置终端键盘处理（提取为独立函数以便复用）
+let shortcutHandled = false;
+
 function setupTerminalKeyHandler(terminal, ptyId) {
   terminal.attachCustomKeyEventHandler((event) => {
     // Ctrl+Shift+C: 复制选中的文本
@@ -1713,15 +1743,17 @@ function setupTerminalKeyHandler(terminal, ptyId) {
       });
       return false;
     }
-    // Ctrl+1~6 直接发送常用模板（终端焦点状态下也能触发）
+    // Ctrl+1~6 直接发送常用模板（始终拦截，防止发送到终端）
     if (event.ctrlKey && !event.shiftKey && !event.altKey && event.type === 'keydown') {
       const keyNum = parseInt(event.key);
       if (keyNum >= 1 && keyNum <= 6) {
         const template = quickReplyData.templates.find(t => t.shortcut === keyNum);
         if (template) {
+          shortcutHandled = true;
           window.useTemplate(template.id);
-          return false;
+          setTimeout(() => { shortcutHandled = false; }, 50);
         }
+        return false;
       }
     }
     return true;
@@ -2703,14 +2735,14 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && quickReplyVisible) {
     hideQuickReplyPanel();
   }
-  // Ctrl+1~6 直接发送常用模板
+  // Ctrl+1~6 直接发送常用模板（终端未聚焦或终端处理器未拦截时触发）
   if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key >= '1' && e.key <= '6') {
-    // 如果事件已经被处理（来自终端处理器），跳过
-    if (e.defaultPrevented) return;
+    if (shortcutHandled) return;
     const shortcutNum = parseInt(e.key);
     const template = quickReplyData.templates.find(t => t.shortcut === shortcutNum);
     if (template) {
       e.preventDefault();
+      e.stopPropagation();
       window.useTemplate(template.id);
     }
   }
