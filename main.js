@@ -257,6 +257,44 @@ function createWindow() {
     }
   });
 
+  // 统一清理函数：杀掉所有终端进程 + 清理资源
+  function cleanupAllTerminals() {
+    console.log('[Main] 清理所有终端进程，数量:', terminals.size);
+    
+    // 先收集所有 PID（clear 后就没了）
+    const pids = [];
+    terminals.forEach((ptyProcess, id) => {
+      if (ptyProcess.pid) pids.push(ptyProcess.pid);
+    });
+    
+    // Windows 上先用 taskkill 强制杀掉进程树（在 ptyProcess.kill 之前，否则 PID 没了）
+    if (process.platform === 'win32' && pids.length > 0) {
+      try {
+        const { execSync } = require('child_process');
+        for (const pid of pids) {
+          try {
+            execSync(`taskkill /F /PID ${pid} /T 2>nul`, { timeout: 3000 });
+            console.log(`[Main] taskkill 已清理进程树 PID ${pid}`);
+          } catch (_) {
+            // 进程已不存在，忽略
+          }
+        }
+      } catch (e) {
+        console.error('[Main] taskkill 清理失败:', e.message);
+      }
+    }
+    
+    // 再调用 ptyProcess.kill() 作为兜底
+    terminals.forEach((ptyProcess) => {
+      try {
+        if (!ptyProcess.killed) {
+          ptyProcess.kill();
+        }
+      } catch (e) {}
+    });
+    terminals.clear();
+  }
+
   mainWindow.on('close', (e) => {
     // 有终端运行时，显示二次确认
     if (terminals.size > 0) {
@@ -277,11 +315,29 @@ function createWindow() {
       }
     }
     
-    // 用户确认关闭
-    console.log('[Main] 窗口关闭，终端数量:', terminals.size);
+    // 用户确认关闭 → 阻止默认关闭，先清理再退出
+    e.preventDefault();
+    console.log('[Main] 窗口关闭，开始清理...');
+    
+    // 停止监控
+    stopProcessMonitor();
+    
+    // 清理所有终端
+    cleanupAllTerminals();
+    
+    // 销毁窗口
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.removeAllListeners('closed');
+      mainWindow.destroy();
+    }
+    
+    // 强制退出应用
+    console.log('[Main] 清理完成，退出应用');
+    app.quit();
   });
   
   mainWindow.on('closed', () => {
+    // 兜底清理（防止 close 没走到）
     terminals.forEach(ptyProcess => {
       try { ptyProcess.kill(); } catch (e) {}
     });
@@ -312,11 +368,25 @@ app.whenReady().then(() => {
   });
 });
 
+app.on('before-quit', () => {
+  console.log('[Main] before-quit，清理所有终端');
+  stopProcessMonitor();
+  terminals.forEach((ptyProcess) => {
+    try { ptyProcess.kill(); } catch (e) {}
+  });
+  terminals.clear();
+});
+
 app.on('window-all-closed', () => {
   // 停止进程监控
   stopProcessMonitor();
   console.log('[Main] 进程监控已停止');
   
+  // 清理残留终端
+  terminals.forEach((ptyProcess) => {
+    try { ptyProcess.kill(); } catch (e) {}
+  });
+  terminals.clear();
   
   if (process.platform !== 'darwin') app.quit();
 });
