@@ -247,37 +247,41 @@ async function restoreSessionOnStartup() {
           setTimeout(() => {
             activateTerminal(firstId);
             console.log('[Renderer] 会话恢复完成，已激活第一个终端');
-            // 重新绑定 onData 事件并修复终端状态
-            const fixTerminal = () => {
+            // 使用 OS 级聚焦修复终端 IME 状态（与快捷窗口相同的方式）
+            const fixTerminalIME = async () => {
               const term = terminals.get(firstId);
-              if (term && term.terminal) {
-                // 重新绑定 onData 事件（确保复制粘贴能发送数据）
-                term.terminal.onData(data => {
-                  ipcRenderer.invoke('write-terminal', { id: term.ptyId, data });
-                });
-                
-                // 强制触发 blur -> focus 循环
-                term.terminal.blur();
-                setTimeout(() => {
-                  term.terminal.focus();
-                  console.log('[Renderer] 终端修复完成：重新绑定 onData + blur->focus 循环');
-                  
-                  // 确保 textarea 状态正确
-                  const wrapper = document.getElementById(`wrapper-${firstId}`);
-                  if (wrapper) {
-                    const ta = wrapper.querySelector('.xterm-helper-textarea');
-                    if (ta) {
-                      ta.readOnly = false;
-                      ta.disabled = false;
-                      ta.focus();
-                    }
-                  }
-                }, 100);
+              if (!term || !term.terminal) return;
+              
+              const wrapper = document.getElementById(`wrapper-${firstId}`);
+              if (!wrapper) return;
+              
+              const ta = wrapper.querySelector('.xterm-helper-textarea');
+              if (ta) {
+                ta.readOnly = false;
+                ta.disabled = false;
               }
+              
+              // 计算终端中心坐标
+              const rect = wrapper.getBoundingClientRect();
+              const coords = rect.width > 0 && rect.height > 0
+                ? { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) }
+                : null;
+              
+              // 关键：调用主进程的 OS 级聚焦，刷新 IME composition 上下文
+              await ipcRenderer.invoke('focus-window', coords);
+              
+              // 等待渲染完成
+              await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+              
+              // 聚焦终端
+              term.terminal.focus();
+              if (ta) ta.focus();
+              
+              console.log('[Renderer] 终端 IME 状态已修复（OS 级聚焦）');
             };
-            fixTerminal();
+            fixTerminalIME();
             // 再次确保修复
-            setTimeout(fixTerminal, 300);
+            setTimeout(fixTerminalIME, 300);
           }, 300);
           // 更新状态显示
           updateHealthStatus();
@@ -1545,6 +1549,23 @@ async function openTerminal(preset) {
         } catch (e) {
           console.error('[Renderer] 恢复后 resize 失败:', e.message);
         }
+      }
+      // 修复窗口恢复后输入法失效和复制粘贴无响应的问题
+      // 通过 blur → focus 循环重新激活 xterm 的 IME composition 状态
+      const wrapper = document.getElementById(`wrapper-${id}`);
+      if (wrapper) {
+        const ta = wrapper.querySelector('.xterm-helper-textarea');
+        if (ta) {
+          ta.readOnly = false;
+          ta.disabled = false;
+        }
+      }
+      if (activeTerminalId === id) {
+        terminal.blur();
+        setTimeout(() => {
+          terminal.focus();
+          console.log('[Renderer] 窗口恢复：终端 IME 状态已修复');
+        }, 100);
       }
     }, 200);
   });

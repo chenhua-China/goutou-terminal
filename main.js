@@ -43,6 +43,22 @@ let lastSessionData = [];
 function saveSession(terminalsToSave) {
   if (terminalsToSave && Array.isArray(terminalsToSave)) {
     lastSessionData = terminalsToSave;
+  } else if ((!lastSessionData || lastSessionData.length === 0) && terminals.size > 0) {
+    // 降级方案：从 terminals Map 自动构建会话数据（用于窗口关闭时）
+    const autoData = [];
+    terminals.forEach((ptyProcess, id) => {
+      const userData = ptyProcess.userData || {};
+      autoData.push({
+        id,
+        shell: userData.shell || 'powershell.exe',
+        cwd: userData.cwd || process.env.USERPROFILE,
+        script: userData.script || '',
+        name: userData.name || 'Terminal',
+        icon: userData.icon || '📟',
+      });
+    });
+    lastSessionData = autoData;
+    console.log('[Main] 自动构建会话数据，终端数量:', autoData.length);
   }
   
   try {
@@ -315,9 +331,12 @@ function createWindow() {
       }
     }
     
-    // 用户确认关闭 → 阻止默认关闭，先清理再退出
+    // 用户确认关闭 → 阻止默认关闭，先保存会话再清理退出
     e.preventDefault();
     console.log('[Main] 窗口关闭，开始清理...');
+    
+    // 先保存会话（在清理终端前，此时 terminals Map 还有数据）
+    saveSession();
     
     // 停止监控
     stopProcessMonitor();
