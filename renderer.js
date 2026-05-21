@@ -243,8 +243,27 @@ async function restoreSessionOnStartup() {
           if (emptyState) emptyState.style.display = 'none';
           
           const firstId = Array.from(terminals.keys())[0];
-          activateTerminal(firstId);
-          console.log('[Renderer] 会话恢复完成，已激活第一个终端');
+          // 延迟激活以确保焦点正确同步（解决输入法问题）
+          setTimeout(() => {
+            activateTerminal(firstId);
+            console.log('[Renderer] 会话恢复完成，已激活第一个终端');
+            // 多次确保焦点（处理输入法问题）
+            const ensureFocus = () => {
+              const term = terminals.get(firstId);
+              if (term && term.terminal) {
+                term.terminal.focus();
+                // 确保 wrapper 也能接收焦点
+                const wrapper = document.getElementById(`wrapper-${firstId}`);
+                if (wrapper) {
+                  wrapper.focus();
+                }
+              }
+            };
+            ensureFocus();
+            setTimeout(ensureFocus, 100);
+            setTimeout(ensureFocus, 300);
+            setTimeout(ensureFocus, 600);
+          }, 300);
           // 更新状态显示
           updateHealthStatus();
         }
