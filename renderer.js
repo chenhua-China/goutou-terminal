@@ -247,30 +247,37 @@ async function restoreSessionOnStartup() {
           setTimeout(() => {
             activateTerminal(firstId);
             console.log('[Renderer] 会话恢复完成，已激活第一个终端');
-            // 模拟弹窗的 blur/focus 循环来修复输入法问题
-            const fixInputMethod = () => {
+            // 重新绑定 onData 事件并修复终端状态
+            const fixTerminal = () => {
               const term = terminals.get(firstId);
               if (term && term.terminal) {
-                term.terminal.focus();
-                // 找到 xterm helper textarea 并模拟 read-only 切换
-                const wrapper = document.getElementById(`wrapper-${firstId}`);
-                if (wrapper) {
-                  const ta = wrapper.querySelector('.xterm-helper-textarea');
-                  if (ta) {
-                    // 强制 textarea 重新初始化（解决输入法问题）
-                    ta.readOnly = true;
-                    setTimeout(() => {
+                // 重新绑定 onData 事件（确保复制粘贴能发送数据）
+                term.terminal.onData(data => {
+                  ipcRenderer.invoke('write-terminal', { id: term.ptyId, data });
+                });
+                
+                // 强制触发 blur -> focus 循环
+                term.terminal.blur();
+                setTimeout(() => {
+                  term.terminal.focus();
+                  console.log('[Renderer] 终端修复完成：重新绑定 onData + blur->focus 循环');
+                  
+                  // 确保 textarea 状态正确
+                  const wrapper = document.getElementById(`wrapper-${firstId}`);
+                  if (wrapper) {
+                    const ta = wrapper.querySelector('.xterm-helper-textarea');
+                    if (ta) {
                       ta.readOnly = false;
+                      ta.disabled = false;
                       ta.focus();
-                      console.log('[Renderer] textarea read-only 切换完成，输入法应正常工作');
-                    }, 50);
+                    }
                   }
-                }
+                }, 100);
               }
             };
-            fixInputMethod();
-            // 再次确保焦点
-            setTimeout(fixInputMethod, 200);
+            fixTerminal();
+            // 再次确保修复
+            setTimeout(fixTerminal, 300);
           }, 300);
           // 更新状态显示
           updateHealthStatus();
