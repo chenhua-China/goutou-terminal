@@ -247,22 +247,30 @@ async function restoreSessionOnStartup() {
           setTimeout(() => {
             activateTerminal(firstId);
             console.log('[Renderer] 会话恢复完成，已激活第一个终端');
-            // 多次确保焦点（处理输入法问题）
-            const ensureFocus = () => {
+            // 模拟弹窗的 blur/focus 循环来修复输入法问题
+            const fixInputMethod = () => {
               const term = terminals.get(firstId);
               if (term && term.terminal) {
                 term.terminal.focus();
-                // 确保 wrapper 也能接收焦点
+                // 找到 xterm helper textarea 并模拟 read-only 切换
                 const wrapper = document.getElementById(`wrapper-${firstId}`);
                 if (wrapper) {
-                  wrapper.focus();
+                  const ta = wrapper.querySelector('.xterm-helper-textarea');
+                  if (ta) {
+                    // 强制 textarea 重新初始化（解决输入法问题）
+                    ta.readOnly = true;
+                    setTimeout(() => {
+                      ta.readOnly = false;
+                      ta.focus();
+                      console.log('[Renderer] textarea read-only 切换完成，输入法应正常工作');
+                    }, 50);
+                  }
                 }
               }
             };
-            ensureFocus();
-            setTimeout(ensureFocus, 100);
-            setTimeout(ensureFocus, 300);
-            setTimeout(ensureFocus, 600);
+            fixInputMethod();
+            // 再次确保焦点
+            setTimeout(fixInputMethod, 200);
           }, 300);
           // 更新状态显示
           updateHealthStatus();
