@@ -1209,6 +1209,24 @@ async function openTerminal(preset) {
     allowProposedApi: true,
   });
 
+  // 修复输入法问题：确保 wrapper 能正确接收焦点事件
+  wrapper.addEventListener('focus', () => {
+    terminal.focus();
+  });
+  
+  // 修复输入法问题：处理 composition events
+  let isComposing = false;
+  terminal.textarea.addEventListener('compositionstart', () => {
+    isComposing = true;
+  });
+  terminal.textarea.addEventListener('compositionend', (e) => {
+    isComposing = false;
+    // 确保终端能接收到最终的输入
+    if (e.data) {
+      terminal._core.coreService.triggerDataEvent(e.data, true);
+    }
+  });
+
   // Unicode11 addon 帮助正确处理 emoji 等宽字符的宽度
 
   const fitAddon = new FitAddon();
@@ -1351,6 +1369,8 @@ async function openTerminal(preset) {
         console.error('[Renderer] 粘贴失败:', err);
       }
       menu.remove();
+      // 粘贴完成后重新聚焦到当前终端
+      focusActiveTerminal();
     });
     menu.appendChild(pasteItem);
 
