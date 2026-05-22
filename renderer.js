@@ -1645,10 +1645,14 @@ function createSessionItem(id, name, cwd, icon) {
 
   item.addEventListener('dragend', (e) => {
     item.classList.remove('dragging');
-    sessionList.querySelectorAll('.drag-over-top, .drag-over-bottom').forEach(el => {
-      el.classList.remove('drag-over-top', 'drag-over-bottom');
-    });
-    saveSessionOrder();
+    // 只在实际发生 drop 时保存顺序
+    if (item._wasDropped) {
+      item._wasDropped = false;
+      sessionList.querySelectorAll('.drag-over-top, .drag-over-bottom').forEach(el => {
+        el.classList.remove('drag-over-top', 'drag-over-bottom');
+      });
+      saveSessionOrder();
+    }
   });
 
   // 单击激活终端
@@ -1676,7 +1680,11 @@ function createSessionItem(id, name, cwd, icon) {
 }
 
 // 设置会话列表拖拽排序
+let sessionDragInitialized = false;
+
 function setupSessionDrag() {
+  if (sessionDragInitialized) return;
+  sessionDragInitialized = true;
   const list = sessionList;
 
   list.addEventListener('dragover', (e) => {
@@ -1720,6 +1728,8 @@ function setupSessionDrag() {
     } else {
       list.insertBefore(draggedItem, target.nextSibling);
     }
+    // 标记已发生 drop，dragend 中根据此标志保存顺序
+    draggedItem._wasDropped = true;
   });
 }
 
