@@ -20,10 +20,12 @@ body {
 /* ========== 左侧会话栏 ========== */
 .sidebar {
   width: 250px;
+  min-width: 120px;
   background: #252526;
   border-right: 1px solid #3c3c3c;
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 
 .sidebar-header {
@@ -114,6 +116,81 @@ body {
 .session-close:hover {
   background: #4c4c4c;
   color: #ffffff;
+}
+
+.session-item[draggable="true"] {
+  cursor: default;
+}
+
+.session-item.dragging {
+  opacity: 0.4;
+  border: 1px dashed #0e639c;
+  background: #1e1e1e;
+}
+
+.session-item.drag-over-top {
+  border-top: 2px solid #0e639c;
+}
+
+.session-item.drag-over-bottom {
+  border-bottom: 2px solid #0e639c;
+}
+
+.drag-grip {
+  width: 16px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  color: #555;
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.drag-grip::before {
+  content: '⋮⋮';
+}
+
+.session-item:hover .drag-grip {
+  opacity: 1;
+}
+
+.drag-grip:hover {
+  color: #0e639c;
+}
+
+.drag-grip:active {
+  cursor: grabbing;
+}
+
+.sidebar-resize-handle {
+  position: absolute;
+  right: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 10;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.sidebar-resize-handle:hover,
+.sidebar-resize-handle.active {
+  background: #0e639c;
+  opacity: 0.6;
+}
+
+.sidebar.narrow .session-cwd {
+  display: none;
+}
+
+.sidebar.narrow .session-name {
+  font-size: 12px;
 }
 
 .sidebar-footer {
