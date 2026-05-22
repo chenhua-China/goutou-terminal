@@ -1654,7 +1654,7 @@ function createSessionItem(id, name, cwd, icon) {
       sessionList.querySelectorAll('.drag-over-top, .drag-over-bottom').forEach(el => {
         el.classList.remove('drag-over-top', 'drag-over-bottom');
       });
-      saveSessionOrder();
+      saveSessionOrder().catch(e => console.error('[Renderer] 保存会话顺序失败:', e.message));
     }
   });
 
@@ -1708,8 +1708,12 @@ function setupSessionDrag() {
   });
 
   list.addEventListener('dragleave', (e) => {
+    // 检查鼠标是否真正离开了 session-item（而非移入子元素）
     const item = e.target.closest('.session-item');
-    if (item) item.classList.remove('drag-over-top', 'drag-over-bottom');
+    const related = e.relatedTarget;
+    if (item && (!related || !item.contains(related))) {
+      item.classList.remove('drag-over-top', 'drag-over-bottom');
+    }
   });
 
   list.addEventListener('drop', (e) => {
