@@ -80,6 +80,9 @@ async function init() {
   // 启动监控
   startMonitor();
   
+  // 设置拖拽排序
+  setupSessionDrag();
+  
   newSessionBtn.addEventListener('click', showMainModal);
 
   document.addEventListener('keydown', (e) => {
@@ -1642,6 +1645,10 @@ function createSessionItem(id, name, cwd, icon) {
 
   item.addEventListener('dragend', (e) => {
     item.classList.remove('dragging');
+    sessionList.querySelectorAll('.drag-over-top, .drag-over-bottom').forEach(el => {
+      el.classList.remove('drag-over-top', 'drag-over-bottom');
+    });
+    saveSessionOrder();
   });
 
   // 单击激活终端
@@ -1666,6 +1673,79 @@ function createSessionItem(id, name, cwd, icon) {
   });
 
   sessionList.appendChild(item);
+}
+
+// 设置会话列表拖拽排序
+function setupSessionDrag() {
+  const list = sessionList;
+
+  list.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const item = e.target.closest('.session-item');
+    if (!item || item.classList.contains('dragging')) return;
+    list.querySelectorAll('.drag-over-top, .drag-over-bottom').forEach(el => {
+      el.classList.remove('drag-over-top', 'drag-over-bottom');
+    });
+    const rect = item.getBoundingClientRect();
+    const midY = rect.top + rect.height / 2;
+    if (e.clientY < midY) {
+      item.classList.add('drag-over-top');
+    } else {
+      item.classList.add('drag-over-bottom');
+    }
+  });
+
+  list.addEventListener('dragleave', (e) => {
+    const item = e.target.closest('.session-item');
+    if (item) item.classList.remove('drag-over-top', 'drag-over-bottom');
+  });
+
+  list.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const draggedId = e.dataTransfer.getData('text/plain');
+    const target = e.target.closest('.session-item');
+    if (!target || target.id === draggedId) return;
+
+    const draggedItem = document.getElementById(draggedId);
+    if (!draggedItem) return;
+
+    const rect = target.getBoundingClientRect();
+    const midY = rect.top + rect.height / 2;
+
+    target.classList.remove('drag-over-top', 'drag-over-bottom');
+
+    if (e.clientY < midY) {
+      list.insertBefore(draggedItem, target);
+    } else {
+      list.insertBefore(draggedItem, target.nextSibling);
+    }
+  });
+}
+
+// 按 DOM 顺序保存会话顺序到 session.json
+async function saveSessionOrder() {
+  const sessionData = [];
+  const items = sessionList.querySelectorAll('.session-item');
+  items.forEach(item => {
+    const id = item.id.replace('session-', '');
+    const term = terminals.get(id);
+    if (term) {
+      sessionData.push({
+        id,
+        shell: term.preset.shell,
+        cwd: term.preset.cwd,
+        script: term.preset.script || '',
+        name: term.name,
+        icon: term.preset.icon || '📟',
+      });
+    }
+  });
+
+  if (sessionData.length > 0) {
+    console.log('[Renderer] 拖拽排序已更新，保存顺序...');
+    await ipcRenderer.invoke('save-session-manual', sessionData);
+  }
 }
 
 // 显示会话右键菜单
