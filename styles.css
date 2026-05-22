@@ -118,10 +118,6 @@ body {
   color: #ffffff;
 }
 
-.session-item[draggable="true"] {
-  cursor: default;
-}
-
 .session-item.dragging {
   opacity: 0.4;
   border: 1px dashed #0e639c;

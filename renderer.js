@@ -1629,6 +1629,21 @@ function createSessionItem(id, name, cwd, icon) {
   // 保存原始名称（不含图标）用于别名编辑
   item.dataset.originalName = displayName;
 
+  // 限制拖拽仅从手柄触发，防止点击/选中文本时误触发拖拽
+  item.addEventListener('dragstart', (e) => {
+    if (!e.target.closest('.drag-grip')) {
+      e.preventDefault();
+      return;
+    }
+    e.dataTransfer.setData('text/plain', item.id);
+    e.dataTransfer.effectAllowed = 'move';
+    requestAnimationFrame(() => item.classList.add('dragging'));
+  });
+
+  item.addEventListener('dragend', (e) => {
+    item.classList.remove('dragging');
+  });
+
   // 单击激活终端
   item.addEventListener('click', (e) => {
     if (!e.target.classList.contains('session-close')) {
