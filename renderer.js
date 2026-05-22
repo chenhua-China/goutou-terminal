@@ -83,6 +83,9 @@ async function init() {
   // 设置拖拽排序
   setupSessionDrag();
   
+  // 设置侧边栏宽度调整
+  setupSidebarResize();
+  
   newSessionBtn.addEventListener('click', showMainModal);
 
   document.addEventListener('keydown', (e) => {
@@ -1755,6 +1758,69 @@ async function saveSessionOrder() {
   if (sessionData.length > 0) {
     console.log('[Renderer] 拖拽排序已更新，保存顺序...');
     await ipcRenderer.invoke('save-session-manual', sessionData);
+  }
+}
+
+// 设置侧边栏宽度调整
+function setupSidebarResize() {
+  const sidebar = document.querySelector('.sidebar');
+  if (!sidebar) return;
+
+  // 创建拖拽条
+  const handle = document.createElement('div');
+  handle.className = 'sidebar-resize-handle';
+  handle.id = 'sidebarResizeHandle';
+  sidebar.appendChild(handle);
+
+  // 恢复上次宽度
+  const savedWidth = localStorage.getItem('sidebarWidth');
+  if (savedWidth) {
+    const width = parseInt(savedWidth, 10);
+    if (width >= 120 && width <= 500) {
+      sidebar.style.width = width + 'px';
+      updateNarrowMode(sidebar, width);
+    }
+  }
+
+  let startX, startWidth;
+
+  handle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    startX = e.clientX;
+    startWidth = sidebar.offsetWidth;
+    handle.classList.add('active');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMouseMove = (e) => {
+      const diff = e.clientX - startX;
+      let newWidth = startWidth + diff;
+      newWidth = Math.max(120, Math.min(500, newWidth));
+      sidebar.style.width = newWidth + 'px';
+      updateNarrowMode(sidebar, newWidth);
+    };
+
+    const onMouseUp = () => {
+      handle.classList.remove('active');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      const finalWidth = parseInt(sidebar.style.width, 10);
+      localStorage.setItem('sidebarWidth', finalWidth);
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  });
+}
+
+// 更新窄宽模式
+function updateNarrowMode(sidebar, width) {
+  if (width < 160) {
+    sidebar.classList.add('narrow');
+  } else {
+    sidebar.classList.remove('narrow');
   }
 }
 
