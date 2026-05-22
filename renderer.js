@@ -1615,7 +1615,9 @@ function createSessionItem(id, name, cwd, icon) {
   const item = document.createElement('div');
   item.className = 'session-item';
   item.id = `session-${id}`;
+  item.draggable = true;
   item.innerHTML = `
+    <div class="drag-grip" title="拖拽排序"></div>
     <span class="session-icon">${icon}</span>
     <div class="session-info">
       <div class="session-name">${displayName}</div>
