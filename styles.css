@@ -266,33 +266,6 @@ body {
   text-overflow: ellipsis;
 }
 
-/* ========== 顶部目录栏 ========== */
-.cwd-bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-  background: #2d2d30;
-  border-bottom: 1px solid #3c3c3c;
-  min-height: 28px;
-  font-size: 12px;
-  color: #969696;
-  user-select: none;
-}
-
-.cwd-icon {
-  font-size: 14px;
-}
-
-.cwd-text {
-  font-family: 'Consolas', 'Courier New', monospace;
-  font-size: 12px;
-  color: #cccccc;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .terminal-container {
   flex: 1;
   position: relative;
