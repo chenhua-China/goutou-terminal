@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, clipboard, shell } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -657,154 +657,25 @@ ipcMain.handle('create-terminal', async (event, options) => {
       }
     }
     
-    // 为 Git Bash 设置特殊环境变量
+    // 为 Git Bash 设置环境变量
     const isGitBash = shellPath.includes('git') || shellPath.includes('bash');
-    const env = getFullUserEnv();  // 使用完整用户环境变量
+    const env = getFullUserEnv();
     
     if (isGitBash) {
-      // Git Bash 需要这些环境变量才能正确执行命令
       env['MSYSTEM'] = 'MINGW64';
       env['CHERE_INVOKING'] = '1';
       env['MSYS2_PATH_TYPE'] = 'inherit';
-      
-      // 设置 Git Bash 使用暗色主题配色
-      env['COLORTERM'] = 'truecolor';
       env['TERM'] = 'xterm-256color';
-      
-      // 完全禁用 ls 的彩色输出（最彻底的方法）
+      // 禁用 ls/grep 彩色输出
       env['CLICOLOR'] = '0';
       env['LS_COLORS'] = '';
-      
-      // 禁用 Git 的彩色输出
-      env['GIT_CONFIG_PARAMETERS'] = "'color.ui=false'";
-      env['GIT_PAGER'] = 'cat';
-      
-      // 禁用 grep 的彩色输出
       env['GREP_COLOR'] = '';
       env['GREP_COLORS'] = '';
-      
-      // 动态检测 Git Bash 的目录结构
-      const gitDir = shellPath.substring(0, shellPath.lastIndexOf('\\'));
-      const gitBinDir = gitDir; // bin 目录
-      const gitUsrBinDir = path.join(gitDir, '..', 'usr', 'bin');
-      const gitMingw64BinDir = path.join(gitDir, '..', 'mingw64', 'bin');
-      
-      // 动态检测 Node.js 和其他工具路径（不再硬编码）
-      const extraPaths = [];
-      
-      // 1. 从系统 PATH 中提取所有有效目录（完整继承系统 PATH）
-      const systemPath = env['PATH'] || '';
-      const pathDirs = systemPath.split(';').filter(p => p && fs.existsSync(p));
-      for (const dir of pathDirs) {
-        if (!extraPaths.includes(dir)) {
-          extraPaths.push(dir);
-        }
-      }
-      
-      // 2. 检查常见 Node.js 安装位置
-      const commonNodePaths = [
-        'C:\\Program Files\\nodejs',
-        'C:\\Program Files (x86)\\nodejs',
-        path.join(process.env.LOCALAPPDATA || '', 'Programs', 'nodejs'),
-        path.join(process.env.PROGRAMFILES || '', 'nodejs'),
-        path.join(process.env['PROGRAMFILES(X86)'] || '', 'nodejs'),
-      ];
-      for (const p of commonNodePaths) {
-        if (p && fs.existsSync(p) && !extraPaths.includes(p)) {
-          extraPaths.push(p);
-        }
-      }
-      
-      // 3. 检测 npm 全局安装路径（多个可能位置）
-      const npmGlobalPaths = [
-        path.join(process.env.APPDATA || '', 'npm'),
-        path.join(process.env.LOCALAPPDATA || '', 'npm'),
-        path.join(os.homedir(), 'AppData', 'Roaming', 'npm'),
-        path.join(os.homedir(), 'AppData', 'Local', 'npm'),
-      ];
-      for (const p of npmGlobalPaths) {
-        if (p && fs.existsSync(p) && !extraPaths.includes(p)) {
-          extraPaths.push(p);
-        }
-      }
-      
-      // 4. 检测 nvm 安装的 Node.js
-      const nvmDir = process.env.NVM_HOME || path.join(process.env.APPDATA || '', 'nvm');
-      if (fs.existsSync(nvmDir)) {
-        // 查找当前使用的 Node.js 版本
-        try {
-          const nvmSettings = fs.readFileSync(path.join(nvmDir, 'settings.txt'), 'utf-8');
-          const rootMatch = nvmSettings.match(/root:\s*(.+)/);
-          if (rootMatch) {
-            const nvmRoot = rootMatch[1].trim();
-            if (fs.existsSync(nvmRoot) && !extraPaths.includes(nvmRoot)) {
-              extraPaths.push(nvmRoot);
-            }
-          }
-        } catch (e) {}
-        
-        // 检查 nvm 的 symlink 目录
-        const nvmSymlink = path.join(nvmDir, 'vcurrent');
-        if (fs.existsSync(nvmSymlink) && !extraPaths.includes(nvmSymlink)) {
-          extraPaths.push(nvmSymlink);
-        }
-      }
-      
-      // 5. 检测 fnm (Fast Node Manager) 安装的 Node.js
-      const fnmDir = process.env.FNM_DIR || path.join(process.env.LOCALAPPDATA || '', 'fnm');
-      const fnmMultishell = process.env.FNM_MULTISHELL_PATH;
-      if (fnmMultishell && fs.existsSync(fnmMultishell) && !extraPaths.includes(fnmMultishell)) {
-        extraPaths.push(fnmMultishell);
-      }
-      if (fs.existsSync(fnmDir)) {
-        // 检查默认安装位置
-        const fnmNodeVersions = path.join(fnmDir, 'node-versions');
-        if (fs.existsSync(fnmNodeVersions)) {
-          try {
-            const versions = fs.readdirSync(fnmNodeVersions);
-            for (const v of versions) {
-              const installation = path.join(fnmNodeVersions, v, 'installation');
-              if (fs.existsSync(installation) && !extraPaths.includes(installation)) {
-                extraPaths.push(installation);
-              }
-            }
-          } catch (e) {}
-        }
-      }
-      
-      // 6. 检测 Python 路径
-      const commonPythonPaths = [
-        'C:\\Python27',
-        'C:\\Python27\\Scripts',
-        'C:\\Python3',
-        'C:\\Python3\\Scripts',
-        path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python27'),
-        path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python27', 'Scripts'),
-        path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python311'),
-        path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python311', 'Scripts'),
-        path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python312'),
-        path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python312', 'Scripts'),
-      ];
-      for (const p of commonPythonPaths) {
-        if (p && fs.existsSync(p) && !extraPaths.includes(p)) {
-          extraPaths.push(p);
-        }
-      }
-      
-      // 组合所有 PATH
-      const allExtraPaths = [gitBinDir, gitUsrBinDir, gitMingw64BinDir, ...extraPaths];
-      // 过滤掉不存在的路径和 undefined/null
-      const validPaths = allExtraPaths.filter(p => p && typeof p === 'string' && fs.existsSync(p));
-      env['PATH'] = `${validPaths.join(';')};${env['PATH'] || ''}`;
-      
-      console.log('[Main] Git Bash 模式：设置环境变量');
-      console.log('[Main] Git 目录:', gitDir);
-      console.log('[Main] 检测到的额外路径:', validPaths);
-      console.log('[Main] PATH:', env['PATH']);
     }
     
-    // 创建新的进程
-    const ptyProcess = pty.spawn(shellPath, [], {
+    // 创建新的进程（Git Bash 使用 --login 触发 /etc/profile 初始化，包含 open 命令）
+    const spawnArgs = isGitBash ? ['--login', '-i'] : [];
+    const ptyProcess = pty.spawn(shellPath, spawnArgs, {
       name: 'xterm-256color',
       cols: cols || 80,
       rows: rows || 24,
@@ -1169,6 +1040,25 @@ ipcMain.handle('health-check', () => {
   }
   
   return health;
+});
+
+// 剪贴板读写（Electron 原生 clipboard，避免 navigator.clipboard 受限）
+ipcMain.handle('clipboard-write', (event, text) => {
+  try {
+    clipboard.writeText(text);
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('clipboard-read', async (event) => {
+  try {
+    const text = clipboard.readText();
+    return { success: true, text };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
 });
 
 // 编辑会话别名对话框（无边框独立窗口，完全不受 xterm 影响）

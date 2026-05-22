@@ -3,6 +3,16 @@ const { Terminal } = require('@xterm/xterm');
 const { FitAddon } = require('@xterm/addon-fit');
 const { Unicode11Addon } = require('@xterm/addon-unicode11');
 
+// 剪贴板辅助函数（使用 Electron 原生 clipboard，避免 navigator.clipboard 在无 admin 权限时失效）
+async function clipboardWrite(text) {
+  return ipcRenderer.invoke('clipboard-write', text);
+}
+
+async function clipboardRead() {
+  const result = await ipcRenderer.invoke('clipboard-read');
+  return result.success ? result.text : '';
+}
+
 // 状态管理
 let terminals = new Map();
 let activeTerminalId = null;
@@ -93,7 +103,7 @@ async function init() {
   cwdCopyBtn?.addEventListener('click', () => {
     const term = terminals.get(activeTerminalId);
     if (term && term.preset && term.preset.cwd) {
-      navigator.clipboard.writeText(term.preset.cwd).then(() => {
+      clipboardWrite(term.preset.cwd).then(() => {
         cwdCopyBtn.classList.add('copied');
         cwdCopyBtn.textContent = '✅';
         setTimeout(() => {
@@ -1378,7 +1388,7 @@ async function openTerminal(preset) {
     });
     if (hasSelection) {
       copyItem.addEventListener('click', () => {
-        navigator.clipboard.writeText(selection).then(() => {
+        clipboardWrite(selection).then(() => {
           console.log('[Renderer] 已复制到剪贴板');
         }).catch(err => {
           console.error('[Renderer] 复制失败:', err);
@@ -1405,9 +1415,13 @@ async function openTerminal(preset) {
     });
     pasteItem.addEventListener('click', async () => {
       try {
-        const text = await navigator.clipboard.readText();
+        const text = await clipboardRead();
         if (text) {
-          ipcRenderer.invoke('write-terminal', { id: ptyId, data: text });
+          // CMD 终端需要 \r\n 换行，其他终端保持原样
+          const term = terminals.get(ptyId);
+          const isCmd = term && term.preset && term.preset.shell.includes('cmd');
+          const normalizedText = isCmd ? text.replace(/\r?\n/g, '\r\n') : text;
+          ipcRenderer.invoke('write-terminal', { id: ptyId, data: normalizedText });
         }
       } catch (err) {
         console.error('[Renderer] 粘贴失败:', err);
@@ -1963,7 +1977,7 @@ function showSessionContextMenu(e, id) {
     menu.remove();
     const term = terminals.get(id);
     if (term && term.preset && term.preset.cwd) {
-      navigator.clipboard.writeText(term.preset.cwd).then(() => {
+      clipboardWrite(term.preset.cwd).then(() => {
         console.log('[Renderer] 项目路径已复制到剪贴板:', term.preset.cwd);
       }).catch(err => {
         console.error('[Renderer] 复制路径失败:', err);
@@ -2059,7 +2073,7 @@ function setupTerminalKeyHandler(terminal, ptyId) {
     if (event.ctrlKey && event.shiftKey && (event.key === 'c' || event.key === 'C') && event.type === 'keydown') {
       const selection = terminal.getSelection();
       if (selection) {
-        navigator.clipboard.writeText(selection).then(() => {
+        clipboardWrite(selection).then(() => {
           console.log('[Renderer] ✅ 已复制到剪贴板');
         }).catch(err => {
           console.error('[Renderer] ❌ 复制失败:', err);
@@ -2070,9 +2084,13 @@ function setupTerminalKeyHandler(terminal, ptyId) {
     }
     // Ctrl+Shift+V: 粘贴
     if (event.ctrlKey && event.shiftKey && (event.key === 'v' || event.key === 'V') && event.type === 'keydown') {
-      navigator.clipboard.readText().then(text => {
+      clipboardRead().then(text => {
         if (text) {
-          ipcRenderer.invoke('write-terminal', { id: ptyId, data: text });
+          // CMD 终端需要 \r\n 换行，其他终端保持原样
+          const term = terminals.get(ptyId);
+          const isCmd = term && term.preset && term.preset.shell.includes('cmd');
+          const normalizedText = isCmd ? text.replace(/\r?\n/g, '\r\n') : text;
+          ipcRenderer.invoke('write-terminal', { id: ptyId, data: normalizedText });
         }
       }).catch(err => {
         console.error('[Renderer] 粘贴失败:', err);
