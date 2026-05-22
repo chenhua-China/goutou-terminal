@@ -20,7 +20,7 @@ body {
 /* ========== 左侧会话栏 ========== */
 .sidebar {
   width: 250px;
-  min-width: 120px;
+  min-width: 50px;
   background: #252526;
   border-right: 1px solid #3c3c3c;
   display: flex;
@@ -32,12 +32,21 @@ body {
   padding: 12px 16px;
   border-bottom: 1px solid #3c3c3c;
   background: #2d2d30;
+  overflow: hidden;
 }
 
 .sidebar-header h2 {
   font-size: 14px;
   font-weight: 600;
   color: #ffffff;
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: clip;
+}
+
+.sidebar.narrow .sidebar-header h2 {
+  font-size: 13px;
 }
 
 .session-list {
@@ -185,13 +194,36 @@ body {
   display: none;
 }
 
+.sidebar.narrow .session-close {
+  display: none;
+}
+
 .sidebar.narrow .session-name {
   font-size: 12px;
+}
+
+.sidebar.ultra-narrow .session-info {
+  display: none;
+}
+
+.sidebar.ultra-narrow .session-close {
+  display: none;
+}
+
+.sidebar.ultra-narrow .session-item {
+  padding: 8px 8px;
+  justify-content: center;
+  gap: 4px;
+}
+
+.sidebar.ultra-narrow .session-icon {
+  font-size: 20px;
 }
 
 .sidebar-footer {
   padding: 12px 16px;
   border-top: 1px solid #3c3c3c;
+  overflow: hidden;
 }
 
 .btn {
@@ -202,6 +234,17 @@ body {
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: clip;
+}
+
+.sidebar.narrow .sidebar-footer {
+  padding: 12px 12px;
+}
+
+.sidebar.narrow .btn {
+  padding: 8px 8px;
 }
 
 .btn-primary {
@@ -260,6 +303,36 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.cwd-copy-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #969696;
+  transition: all 0.2s;
+  user-select: none;
+}
+
+.cwd-copy-btn:hover {
+  background: #3c3c3c;
+  border-color: #4c4c4c;
+  color: #cccccc;
+}
+
+.cwd-copy-btn:active {
+  background: #0e639c;
+  border-color: #0e639c;
+  color: #ffffff;
+}
+
+.cwd-copy-btn.copied {
+  background: #4CAF50;
+  border-color: #4CAF50;
+  color: #ffffff;
 }
 
 .terminal-container {

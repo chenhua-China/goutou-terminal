@@ -25,6 +25,7 @@ const terminalContainer = document.getElementById('terminalContainer');
 const emptyState = document.getElementById('emptyState');
 const newSessionBtn = document.getElementById('newSessionBtn');
 const cwdText = document.getElementById('cwdText');
+const cwdCopyBtn = document.getElementById('cwdCopyBtn');
 
 // 弹窗
 let modalOverlay;
@@ -87,6 +88,23 @@ async function init() {
   setupSidebarResize();
   
   newSessionBtn.addEventListener('click', showMainModal);
+
+  // 复制项目路径按钮
+  cwdCopyBtn?.addEventListener('click', () => {
+    const term = terminals.get(activeTerminalId);
+    if (term && term.preset && term.preset.cwd) {
+      navigator.clipboard.writeText(term.preset.cwd).then(() => {
+        cwdCopyBtn.classList.add('copied');
+        cwdCopyBtn.textContent = '✅';
+        setTimeout(() => {
+          cwdCopyBtn.classList.remove('copied');
+          cwdCopyBtn.textContent = '📋';
+        }, 1500);
+      }).catch(err => {
+        console.error('[Renderer] 复制路径失败:', err);
+      });
+    }
+  });
 
   document.addEventListener('keydown', (e) => {
     if (e.ctrlKey && e.key === 't') {
@@ -1338,7 +1356,7 @@ async function openTerminal(preset) {
       padding: 4px 0;
       box-shadow: 0 4px 12px rgba(0,0,0,0.5);
       z-index: 9999;
-      min-width: 120px;
+    min-width: 150px;
     `;
 
     const hasSelection = !!selection;
@@ -1637,16 +1655,21 @@ function createSessionItem(id, name, cwd, icon) {
 
   // 限制拖拽仅从手柄触发，防止点击/选中文本时误触发拖拽
   item.addEventListener('dragstart', (e) => {
-    if (!e.target.closest('.drag-grip')) {
+    console.log('[Renderer] dragstart 触发, target:', e.target.className);
+    // 允许从 session-item 的任何位置开始拖拽（除了关闭按钮）
+    if (e.target.closest('.session-close')) {
+      console.log('[Renderer] dragstart 被阻止：点击了关闭按钮');
       e.preventDefault();
       return;
     }
     e.dataTransfer.setData('text/plain', item.id);
     e.dataTransfer.effectAllowed = 'move';
     requestAnimationFrame(() => item.classList.add('dragging'));
+    console.log('[Renderer] dragstart 成功, item.id:', item.id);
   });
 
   item.addEventListener('dragend', (e) => {
+    console.log('[Renderer] dragend 事件触发, _wasDropped:', item._wasDropped);
     item.classList.remove('dragging');
     // 只在实际发生 drop 时保存顺序
     if (item._wasDropped) {
@@ -1654,6 +1677,7 @@ function createSessionItem(id, name, cwd, icon) {
       sessionList.querySelectorAll('.drag-over-top, .drag-over-bottom').forEach(el => {
         el.classList.remove('drag-over-top', 'drag-over-bottom');
       });
+      console.log('[Renderer] 调用 saveSessionOrder...');
       saveSessionOrder().catch(e => console.error('[Renderer] 保存会话顺序失败:', e.message));
     }
   });
@@ -1720,10 +1744,17 @@ function setupSessionDrag() {
     e.preventDefault();
     const draggedId = e.dataTransfer.getData('text/plain');
     const target = e.target.closest('.session-item');
-    if (!target || target.id === draggedId) return;
+    console.log('[Renderer] drop 事件触发, draggedId:', draggedId, 'target:', target?.id);
+    if (!target || target.id === draggedId) {
+      console.log('[Renderer] drop 被忽略：target 无效或与 dragged 相同');
+      return;
+    }
 
     const draggedItem = document.getElementById(draggedId);
-    if (!draggedItem) return;
+    if (!draggedItem) {
+      console.log('[Renderer] drop 被忽略：找不到 draggedItem');
+      return;
+    }
 
     const rect = target.getBoundingClientRect();
     const midY = rect.top + rect.height / 2;
@@ -1732,20 +1763,26 @@ function setupSessionDrag() {
 
     if (e.clientY < midY) {
       list.insertBefore(draggedItem, target);
+      console.log('[Renderer] 插入到 target 之前');
     } else {
       list.insertBefore(draggedItem, target.nextSibling);
+      console.log('[Renderer] 插入到 target 之后');
     }
     // 标记已发生 drop，dragend 中根据此标志保存顺序
     draggedItem._wasDropped = true;
+    console.log('[Renderer] _wasDropped 设置为 true');
   });
 }
 
 // 按 DOM 顺序保存会话顺序到 session.json
 async function saveSessionOrder() {
+  console.log('[Renderer] saveSessionOrder 开始执行');
   const sessionData = [];
   const items = sessionList.querySelectorAll('.session-item');
-  items.forEach(item => {
+  console.log('[Renderer] 找到 session-item 数量:', items.length);
+  items.forEach((item, index) => {
     const id = item.id.replace('session-', '');
+    console.log(`[Renderer] item[${index}]:`, id);
     const term = terminals.get(id);
     if (term) {
       sessionData.push({
@@ -1760,8 +1797,11 @@ async function saveSessionOrder() {
   });
 
   if (sessionData.length > 0) {
-    console.log('[Renderer] 拖拽排序已更新，保存顺序...');
+    console.log('[Renderer] 拖拽排序已更新，保存顺序...', JSON.stringify(sessionData.map(s => s.name)));
     await ipcRenderer.invoke('save-session-manual', sessionData);
+    console.log('[Renderer] 会话顺序已保存');
+  } else {
+    console.log('[Renderer] saveSessionOrder: sessionData 为空，未保存');
   }
 }
 
@@ -1778,7 +1818,7 @@ function setupSidebarResize() {
   const savedWidth = localStorage.getItem('sidebarWidth');
   if (savedWidth) {
     const width = parseInt(savedWidth, 10);
-    if (width >= 120 && width <= 500) {
+    if (width >= 50 && width <= 400) {
       sidebar.style.width = width + 'px';
       updateNarrowMode(sidebar, width);
     }
@@ -1799,7 +1839,7 @@ function setupSidebarResize() {
     const onMouseMove = (e) => {
       const diff = e.clientX - startX;
       let newWidth = startWidth + diff;
-      newWidth = Math.max(120, Math.min(500, newWidth));
+      newWidth = Math.max(50, Math.min(400, newWidth));
       sidebar.style.width = newWidth + 'px';
       updateNarrowMode(sidebar, newWidth);
     };
@@ -1822,10 +1862,43 @@ function setupSidebarResize() {
 
 function updateNarrowMode(sidebar, width) {
   const isNarrow = width < 160;
+  const isUltraNarrow = width < 80;
+  
+  if (isUltraNarrow && !sidebar.classList.contains('ultra-narrow')) {
+    sidebar.classList.add('ultra-narrow');
+    sidebar.classList.add('narrow');
+  } else if (!isUltraNarrow && sidebar.classList.contains('ultra-narrow')) {
+    sidebar.classList.remove('ultra-narrow');
+  }
+  
   if (isNarrow && !sidebar.classList.contains('narrow')) {
     sidebar.classList.add('narrow');
   } else if (!isNarrow && sidebar.classList.contains('narrow')) {
     sidebar.classList.remove('narrow');
+  }
+  
+  // 更新标题文字
+  const title = sidebar.querySelector('.sidebar-header h2');
+  if (title) {
+    if (isUltraNarrow) {
+      title.textContent = '📋';
+    } else if (isNarrow) {
+      title.textContent = '📋 会话';
+    } else {
+      title.textContent = '📋 会话列表';
+    }
+  }
+  
+  // 更新按钮文字
+  const btn = sidebar.querySelector('#newSessionBtn');
+  if (btn) {
+    if (isUltraNarrow) {
+      btn.textContent = '➕';
+    } else if (isNarrow) {
+      btn.textContent = '➕ 新建';
+    } else {
+      btn.textContent = '➕ 新建会话';
+    }
   }
 }
 
@@ -1847,7 +1920,7 @@ function showSessionContextMenu(e, id) {
     padding: 4px 0;
     box-shadow: 0 4px 12px rgba(0,0,0,0.5);
     z-index: 9999;
-    min-width: 120px;
+    min-width: 150px;
   `;
 
   // 编辑别名选项
@@ -1870,6 +1943,34 @@ function showSessionContextMenu(e, id) {
     editSessionAlias(id);
   });
   menu.appendChild(editItem);
+
+  // 复制项目路径选项
+  const copyPathItem = document.createElement('div');
+  copyPathItem.textContent = '📋 复制项目路径';
+  copyPathItem.style.cssText = `
+    padding: 8px 16px;
+    cursor: pointer;
+    color: #cccccc;
+    font-size: 13px;
+  `;
+  copyPathItem.addEventListener('mouseenter', () => {
+    copyPathItem.style.background = '#0e639c';
+  });
+  copyPathItem.addEventListener('mouseleave', () => {
+    copyPathItem.style.background = 'transparent';
+  });
+  copyPathItem.addEventListener('click', () => {
+    menu.remove();
+    const term = terminals.get(id);
+    if (term && term.preset && term.preset.cwd) {
+      navigator.clipboard.writeText(term.preset.cwd).then(() => {
+        console.log('[Renderer] 项目路径已复制到剪贴板:', term.preset.cwd);
+      }).catch(err => {
+        console.error('[Renderer] 复制路径失败:', err);
+      });
+    }
+  });
+  menu.appendChild(copyPathItem);
 
   // 关闭终端选项
   const closeItem = document.createElement('div');
