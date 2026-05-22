@@ -1766,13 +1766,11 @@ function setupSidebarResize() {
   const sidebar = document.querySelector('.sidebar');
   if (!sidebar) return;
 
-  // 创建拖拽条
   const handle = document.createElement('div');
   handle.className = 'sidebar-resize-handle';
   handle.id = 'sidebarResizeHandle';
   sidebar.appendChild(handle);
 
-  // 恢复上次宽度
   const savedWidth = localStorage.getItem('sidebarWidth');
   if (savedWidth) {
     const width = parseInt(savedWidth, 10);
@@ -1782,9 +1780,11 @@ function setupSidebarResize() {
     }
   }
 
-  let startX, startWidth;
+  let startX, startWidth, isResizing = false;
 
   handle.addEventListener('mousedown', (e) => {
+    if (isResizing) return;
+    isResizing = true;
     e.preventDefault();
     startX = e.clientX;
     startWidth = sidebar.offsetWidth;
@@ -1806,6 +1806,7 @@ function setupSidebarResize() {
       document.body.style.userSelect = '';
       const finalWidth = parseInt(sidebar.style.width, 10);
       localStorage.setItem('sidebarWidth', finalWidth);
+      isResizing = false;
       document.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('mouseup', onMouseUp);
     };
@@ -1815,11 +1816,11 @@ function setupSidebarResize() {
   });
 }
 
-// 更新窄宽模式
 function updateNarrowMode(sidebar, width) {
-  if (width < 160) {
+  const isNarrow = width < 160;
+  if (isNarrow && !sidebar.classList.contains('narrow')) {
     sidebar.classList.add('narrow');
-  } else {
+  } else if (!isNarrow && sidebar.classList.contains('narrow')) {
     sidebar.classList.remove('narrow');
   }
 }
