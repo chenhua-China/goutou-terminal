@@ -661,7 +661,20 @@ ipcMain.handle('create-terminal', async (event, options) => {
 
   try {
     const defaultShell = os.platform() === 'win32' ? 'powershell.exe' : 'bash';
-    const shellPath = shell || defaultShell;
+    let shellPath = shell || defaultShell;
+    
+    // 修复：如果会话保存了 WSL bash 路径，强制替换为正确的 Git Bash
+    const normalizedShell = shellPath.toLowerCase();
+    if (normalizedShell.includes('windows\\system32\\bash') || normalizedShell.includes('wsl')) {
+      const correctGitBash = findGitBash();
+      if (correctGitBash) {
+        console.log(`[Main] 检测到历史会话使用了 WSL bash，已替换为 Git Bash: ${correctGitBash}`);
+        shellPath = correctGitBash;
+      } else {
+        console.error('[Main] 无法找到 Git Bash，拒绝启动 WSL bash');
+        return { success: false, error: '检测到 WSL bash，但无法找到 Git Bash。请安装 Git for Windows。' };
+      }
+    }
     
     if (shellPath.includes('\\') || shellPath.includes('/')) {
       if (!fs.existsSync(shellPath)) {
@@ -674,6 +687,16 @@ ipcMain.handle('create-terminal', async (event, options) => {
     const env = getFullUserEnv();
     
     if (isGitBash) {
+      console.log('[Main] Git Bash 诊断 - shellPath:', shellPath);
+      console.log('[Main] Git Bash 诊断 - isGitBash:', isGitBash);
+      
+      // 验证：确认这个 bash.exe 确实是 Git 的，不是 WSL 的
+      const normalizedShell = shellPath.toLowerCase();
+      if (normalizedShell.includes('\\windows\\system32\\') || normalizedShell.includes('wsl')) {
+        console.error('[Main] 错误：检测到 WSL bash，拒绝启动:', shellPath);
+        return { success: false, error: '检测到 WSL bash.exe，请使用 Git Bash' };
+      }
+      
       env['MSYSTEM'] = 'MINGW64';
       env['CHERE_INVOKING'] = '1';
       env['MSYS2_PATH_TYPE'] = 'inherit';
@@ -687,6 +710,11 @@ ipcMain.handle('create-terminal', async (event, options) => {
     
     // 创建新的进程（Git Bash 使用 --login 触发 /etc/profile 初始化，包含 open 命令）
     const spawnArgs = isGitBash ? ['--login', '-i'] : [];
+    if (isGitBash) {
+      console.log('[Main] Git Bash 诊断 - spawnArgs:', JSON.stringify(spawnArgs));
+      console.log('[Main] Git Bash 诊断 - MSYSTEM:', env['MSYSTEM']);
+      console.log('[Main] Git Bash 诊断 - CHERE_INVOKING:', env['CHERE_INVOKING']);
+    }
     const ptyProcess = pty.spawn(shellPath, spawnArgs, {
       name: 'xterm-256color',
       cols: cols || 80,

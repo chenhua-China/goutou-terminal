@@ -1057,7 +1057,11 @@ function blurActiveTerminal() {
 function focusActiveTerminal() {
   if (activeTerminalId) {
     const term = terminals.get(activeTerminalId);
-    if (term) term.terminal.focus();
+    if (term) {
+      requestAnimationFrame(() => {
+        term.terminal.focus();
+      });
+    }
   }
 }
 
@@ -1319,6 +1323,8 @@ async function openTerminal(preset) {
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       terminal.open(wrapper);
+      // open 后立即聚焦，让 IME 立即生效
+      terminal.focus();
 
       // open 后再等一帧才 fit
       requestAnimationFrame(() => {
@@ -1326,19 +1332,6 @@ async function openTerminal(preset) {
         console.log('[Renderer] 终端已 open 并 fit');
       });
     });
-  });
-
-  // 确保 wrapper 可以接收焦点
-  wrapper.addEventListener('click', () => {
-    wrapper.focus();
-    terminal.focus();
-  });
-
-  // 按 Tab 键时也聚焦终端
-  wrapper.addEventListener('keydown', (e) => {
-    if (e.key === 'Tab') {
-      terminal.focus();
-    }
   });
 
   // xterm v5 添加自定义键盘事件处理,支持 Ctrl+Shift+C/V 复制粘贴
@@ -2435,10 +2428,8 @@ ${health.recommendations.length > 0
 function optimizeTerminalSwitch(id) {
   const startTime = performance.now();
   
-  // 预加载终端数据
   const term = terminals.get(id);
   if (term) {
-    // 立即切换显示，不等待 requestAnimationFrame
     const wrapper = document.getElementById(`wrapper-${id}`);
     const sessionItem = document.getElementById(`session-${id}`);
     
@@ -2451,12 +2442,11 @@ function optimizeTerminalSwitch(id) {
         if (s) s.classList.remove('active');
       });
       
-      // 先显示当前终端（不立即 fit，等浏览器完成布局后再 fit）
       wrapper.style.display = 'block';
       if (sessionItem) sessionItem.classList.add('active');
       
-      // 关键修复：用 requestAnimationFrame 确保浏览器完成布局后再 fit
-      // 这样可以防止文本漂移和光标错位
+      // 关键修复：延迟聚焦到 rAF，确保浏览器完成布局后再 focus
+      // 这样可以保证 xterm 的 textarea 已在 DOM 中且位置正确
       requestAnimationFrame(() => {
         try {
           term.fitAddon.fit();
@@ -2473,10 +2463,9 @@ function optimizeTerminalSwitch(id) {
         } catch (e) {
           console.error('[Renderer] fit 失败:', e.message);
         }
+        // fit 之后再聚焦，确保 IME textarea 可用
+        term.terminal.focus();
       });
-      
-      // 聚焦终端
-      term.terminal.focus();
     }
   }
 }
