@@ -429,18 +429,23 @@ function findGitBash() {
     process.env['LOCALAPPDATA'] + '\\Programs\\Git\\bin\\bash.exe',
   ];
   
-  // 检查 PATH 环境变量
+  // 检查 PATH 环境变量（严格验证必须在 Git 安装目录中）
   const pathEnv = process.env.PATH || '';
   const pathDirs = pathEnv.split(';');
   for (const dir of pathDirs) {
-    const gitBashInPath = path.join(dir, 'bash.exe');
-    if (fs.existsSync(gitBashInPath)) {
-      // 确认是 Git Bash 而不是其他 bash
+    const bashInPath = path.join(dir, 'bash.exe');
+    if (fs.existsSync(bashInPath)) {
       try {
-        const stat = fs.statSync(gitBashInPath);
+        const stat = fs.statSync(bashInPath);
         if (stat.isFile()) {
-          console.log('[Main] 在 PATH 中找到 Git Bash:', gitBashInPath);
-          return gitBashInPath;
+          // 验证：路径必须包含 "Git" 目录，排除 WSL/System32 的 bash.exe
+          const normalizedPath = bashInPath.toLowerCase();
+          if (normalizedPath.includes('\\git\\') || normalizedPath.includes('/git/')) {
+            console.log('[Main] 在 PATH 中找到 Git Bash:', bashInPath);
+            return bashInPath;
+          } else {
+            console.log('[Main] 跳过非 Git bash:', bashInPath);
+          }
         }
       } catch (e) {}
     }
