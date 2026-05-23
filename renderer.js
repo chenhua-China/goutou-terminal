@@ -939,8 +939,8 @@ function showEditTemplateModal(template) {
     cwdInput.value = selected.dataset.cwd;
   });
 
-  editModal.querySelector('#closeEditModalBtn').addEventListener('click', () => { editModal.remove(); focusActiveTerminal(); });
-  editModal.querySelector('#cancelEditBtn').addEventListener('click', () => { editModal.remove(); focusActiveTerminal(); });
+  editModal.querySelector('#closeEditModalBtn').addEventListener('click', () => { editModal.remove(); restoreFocusToTerminal(); });
+  editModal.querySelector('#cancelEditBtn').addEventListener('click', () => { editModal.remove(); restoreFocusToTerminal(); });
   editModal.querySelector('#saveEditBtn').addEventListener('click', () => saveEditTemplate(template.id, editModal));
 
   blurActiveTerminal();
@@ -1065,6 +1065,20 @@ function focusActiveTerminal() {
   }
 }
 
+// 模态框关闭后同步恢复焦点到终端（不需要延迟）
+function restoreFocusToTerminal() {
+  if (activeTerminalId) {
+    const term = terminals.get(activeTerminalId);
+    if (term) {
+      // 先点击 wrapper 确保浏览器识别当前活动元素
+      const wrapper = document.getElementById(`wrapper-${activeTerminalId}`);
+      if (wrapper) wrapper.focus();
+      // 同步聚焦 xterm textarea
+      term.terminal.focus();
+    }
+  }
+}
+
 // 通用弹窗输入框聚焦助手（解决 Electron 焦点问题）
 async function focusModalInput(selector, root) {
   const input = (root || document).querySelector(selector);
@@ -1123,7 +1137,7 @@ function showMainModal() {
 }
 function hideMainModal() {
   modalOverlay.classList.remove('active');
-  focusActiveTerminal();
+  restoreFocusToTerminal();
 }
 function showCreateTemplateModal() {
   blurActiveTerminal();
@@ -1132,7 +1146,7 @@ function showCreateTemplateModal() {
 }
 function hideCreateTemplateModal() {
   createTemplateModal.classList.remove('active');
-  focusActiveTerminal();
+  restoreFocusToTerminal();
 }
 function showManageTemplateModal() {
   blurActiveTerminal();
@@ -1142,7 +1156,7 @@ function showManageTemplateModal() {
 }
 function hideManageTemplateModal() {
   manageTemplateModal.classList.remove('active');
-  focusActiveTerminal();
+  restoreFocusToTerminal();
 }
 
 async function saveTemplate() {
@@ -1420,8 +1434,8 @@ async function openTerminal(preset) {
         console.error('[Renderer] 粘贴失败:', err);
       }
       menu.remove();
-      // 粘贴完成后重新聚焦到当前终端
-      focusActiveTerminal();
+      // 粘贴完成后同步重新聚焦到当前终端
+      restoreFocusToTerminal();
     });
     menu.appendChild(pasteItem);
 
