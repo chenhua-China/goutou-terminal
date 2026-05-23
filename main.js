@@ -419,39 +419,19 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('[Main] 未处理的 Promise 拒绝:', reason);
 });
 
-// 自动查找 Git Bash
+// 自动查找 Git Bash（使用 usr/bin/bash.exe，避免与 WSL bash 混淆）
 function findGitBash() {
   const commonPaths = [
+    'C:\\Program Files\\Git\\usr\\bin\\bash.exe',
+    'C:\\Program Files (x86)\\Git\\usr\\bin\\bash.exe',
     'C:\\Program Files\\Git\\bin\\bash.exe',
     'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
-    process.env['PROGRAMFILES'] + '\\Git\\bin\\bash.exe',
-    process.env['PROGRAMFILES(X86)'] + '\\Git\\bin\\bash.exe',
-    process.env['LOCALAPPDATA'] + '\\Programs\\Git\\bin\\bash.exe',
+    process.env['PROGRAMFILES'] + '\\Git\\usr\\bin\\bash.exe',
+    process.env['PROGRAMFILES(X86)'] + '\\Git\\usr\\bin\\bash.exe',
+    process.env['LOCALAPPDATA'] + '\\Programs\\Git\\usr\\bin\\bash.exe',
   ];
   
-  // 检查 PATH 环境变量（严格验证必须在 Git 安装目录中）
-  const pathEnv = process.env.PATH || '';
-  const pathDirs = pathEnv.split(';');
-  for (const dir of pathDirs) {
-    const bashInPath = path.join(dir, 'bash.exe');
-    if (fs.existsSync(bashInPath)) {
-      try {
-        const stat = fs.statSync(bashInPath);
-        if (stat.isFile()) {
-          // 验证：路径必须包含 "Git" 目录，排除 WSL/System32 的 bash.exe
-          const normalizedPath = bashInPath.toLowerCase();
-          if (normalizedPath.includes('\\git\\') || normalizedPath.includes('/git/')) {
-            console.log('[Main] 在 PATH 中找到 Git Bash:', bashInPath);
-            return bashInPath;
-          } else {
-            console.log('[Main] 跳过非 Git bash:', bashInPath);
-          }
-        }
-      } catch (e) {}
-    }
-  }
-  
-  // 检查常见安装路径
+  // 检查常见安装路径（优先 usr/bin，这是 MSYS2 标准位置）
   for (const p of commonPaths) {
     if (p && fs.existsSync(p)) {
       console.log('[Main] 在常见路径找到 Git Bash:', p);
@@ -459,7 +439,7 @@ function findGitBash() {
     }
   }
   
-  // 尝试从注册表读取 (Windows)
+  // 从注册表读取 Git 安装路径
   if (process.platform === 'win32') {
     try {
       const { execSync } = require('child_process');
@@ -469,14 +449,41 @@ function findGitBash() {
       );
       const match = regOutput.match(/InstallPath\s+REG_SZ\s+(.+)/i);
       if (match) {
-        const installPath = path.join(match[1].trim(), 'bin\\bash.exe');
+        const installPath = path.join(match[1].trim(), 'usr\\bin\\bash.exe');
         if (fs.existsSync(installPath)) {
           console.log('[Main] 从注册表找到 Git Bash:', installPath);
           return installPath;
         }
+        // 降级到 bin/bash.exe
+        const binPath = path.join(match[1].trim(), 'bin\\bash.exe');
+        if (fs.existsSync(binPath)) {
+          console.log('[Main] 从注册表找到 Git Bash (bin):', binPath);
+          return binPath;
+        }
       }
     } catch (e) {
       // 注册表查询失败，忽略
+    }
+  }
+  
+  // 最终降级：在 PATH 中查找 bash.exe（严格验证必须是 Git 目录）
+  const pathEnv = process.env.PATH || '';
+  const pathDirs = pathEnv.split(';');
+  for (const dir of pathDirs) {
+    const bashInPath = path.join(dir, 'bash.exe');
+    if (fs.existsSync(bashInPath)) {
+      try {
+        const stat = fs.statSync(bashInPath);
+        if (stat.isFile()) {
+          const normalizedPath = bashInPath.toLowerCase();
+          if (normalizedPath.includes('\\git\\') || normalizedPath.includes('/git/')) {
+            console.log('[Main] 在 PATH 中找到 Git Bash:', bashInPath);
+            return bashInPath;
+          } else {
+            console.log('[Main] 跳过非 Git bash:', bashInPath);
+          }
+        }
+      } catch (e) {}
     }
   }
   
