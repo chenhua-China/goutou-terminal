@@ -587,45 +587,88 @@ ipcMain.handle('clear-session', () => {
   return { success: true };
 });
 
-// 获取完整的用户环境变量（包括用户 PATH）
+// 展开环境变量中的 %VAR% 引用
+function expandEnvVars(value) {
+  if (!value || typeof value !== 'string' || !value.includes('%')) return value;
+  return value.replace(/%([^%]+)%/g, (_, varName) => {
+    return process.env[varName] || `%${varName}%`;
+  });
+}
+
+// 合并 PATH 字符串并去重
+function mergePaths(...pathStrings) {
+  const allPaths = new Set();
+  for (const p of pathStrings) {
+    if (p) p.split(';').filter(Boolean).forEach(x => allPaths.add(x));
+  }
+  return Array.from(allPaths).join(';');
+}
+
+// 获取完整的用户环境变量（包括用户 PATH + 系统 PATH + 其他系统变量）
 function getFullUserEnv() {
-  // 复制基础环境变量
   const env = { ...process.env };
   
-  // 在 Windows 上，通过注册表获取用户 PATH
   if (os.platform() === 'win32') {
     try {
       const { execSync } = require('child_process');
       
-      // 获取用户 PATH
-      const userPathOutput = execSync(
-        'reg query "HKCU\\Environment" /v PATH 2>nul',
+      // 读取所有系统环境变量
+      const systemEnvVars = {};
+      const systemOutput = execSync(
+        'reg query "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment" 2>nul',
         { encoding: 'utf8' }
       );
-      const userPathMatch = userPathOutput.match(/PATH\s+REG(?:_EXPAND_)?SZ\s+(.+)/i);
-      if (userPathMatch) {
-        const userPath = userPathMatch[1].trim();
-        // 合并用户 PATH 到现有 PATH
-        env['PATH'] = `${env['PATH'] || ''};${userPath}`;
-        console.log('[Main] 用户 PATH:', userPath);
+      const systemLines = systemOutput.split('\n').filter(l => l.trim());
+      for (const line of systemLines) {
+        const match = line.match(/^(\S+)\s+REG_(?:EXPAND_)?SZ\s+(.+)$/i);
+        if (match) {
+          const key = match[1].trim();
+          let value = match[2].trim();
+          value = expandEnvVars(value);
+          systemEnvVars[key] = value;
+        }
       }
       
-      // 获取系统 PATH（确保完整）
-      const systemPathOutput = execSync(
-        'reg query "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment" /v PATH 2>nul',
-        { encoding: 'utf8' }
-      );
-      const systemPathMatch = systemPathOutput.match(/PATH\s+REG(?:_EXPAND_)?SZ\s+(.+)/i);
-      if (systemPathMatch) {
-        const systemPath = systemPathMatch[1].trim();
-        // 如果系统 PATH 不在当前 PATH 中，合并它
-        if (env['PATH'] && !env['PATH'].includes(systemPath.split(';')[0])) {
-          env['PATH'] = `${systemPath};${env['PATH']}`;
-        }
-        console.log('[Main] 系统 PATH:', systemPath);
+      // 合并系统环境变量（不覆盖已有的 process.env 值）
+      for (const [key, value] of Object.entries(systemEnvVars)) {
+        if (!env[key]) env[key] = value;
       }
+      
+      // 读取所有用户环境变量
+      const userEnvVars = {};
+      try {
+        const userOutput = execSync(
+          'reg query "HKCU\\Environment" 2>nul',
+          { encoding: 'utf8' }
+        );
+        const userLines = userOutput.split('\n').filter(l => l.trim());
+        for (const line of userLines) {
+          const match = line.match(/^(\S+)\s+REG_(?:EXPAND_)?SZ\s+(.+)$/i);
+          if (match) {
+            const key = match[1].trim();
+            let value = match[2].trim();
+            value = expandEnvVars(value);
+            userEnvVars[key] = value;
+          }
+        }
+      } catch (_) {}
+      
+      // 合并用户环境变量（覆盖系统变量）
+      for (const [key, value] of Object.entries(userEnvVars)) {
+        env[key] = value;
+      }
+      
+      // PATH 特殊处理：去重合并用户 + 系统 + 进程
+      env['PATH'] = mergePaths(
+        userEnvVars['PATH'] || '',
+        systemEnvVars['PATH'] || '',
+        process.env['PATH'] || ''
+      );
+      
+      console.log('[Main] 系统环境变量已加载:', Object.keys(systemEnvVars).length, '个');
+      console.log('[Main] 用户环境变量已加载:', Object.keys(userEnvVars).length, '个');
     } catch (e) {
-      console.log('[Main] 获取注册表 PATH 失败:', e.message);
+      console.log('[Main] 获取注册表环境变量失败:', e.message);
     }
   }
   
