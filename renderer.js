@@ -173,7 +173,6 @@ async function init() {
     if (!term._writeBuffer) {
       term._writeBuffer = '';
       term._writeTimer = null;
-      term._fitCounter = 0;
     }
 
     term._writeBuffer += data;
@@ -187,26 +186,8 @@ async function init() {
       term._writeBuffer = '';
     }
 
-    // 停止输出后 200ms 做最终 fit，避免在大量输出期间频繁重排
-    term._writeTimer = setTimeout(() => {
-      try {
-        term.fitAddon.fit();
-        // 同步 PTY 尺寸
-        const dims = term.fitAddon.proposeDimensions();
-        if (dims && dims.cols && dims.rows) {
-          const safeCols = Math.max(20, Math.min(dims.cols, 500));
-          const safeRows = Math.max(5, Math.min(dims.rows, 200));
-          ipcRenderer.invoke('resize-terminal', {
-            id: term.ptyId,
-            cols: safeCols,
-            rows: safeRows
-          });
-        }
-      } catch (e) {
-        console.error('[Renderer] 最终 fit 失败:', e.message);
-      }
-      term._fitCounter = 0;
-    }, 200);
+    // 优化：移除每次输出后的 fit() 调用，只在窗口 resize 时 fit
+    // 原来的代码每次输出后都 fit()，导致 CPU 占用极高
   });
 
   ipcRenderer.on('terminal-exit', (event, { id, exitCode }) => {
@@ -1616,14 +1597,11 @@ async function openTerminal(preset) {
     }
   }, 300);
 
-  // 保存引用以便清理
-  term._handleResize = handleResize;
-
-  ipcRenderer.on('window-minimized', () => {
-    isWindowMinimized = true;
-  });
-
-  ipcRenderer.on('window-restored', () => {
+  // 窗口最小化处理
+  const handleMinimized = () => { isWindowMinimized = true; };
+  
+  // 窗口恢复处理
+  const handleRestored = () => {
     isWindowMinimized = false;
     setTimeout(() => {
       if (activeTerminalId === id) {
@@ -1642,8 +1620,15 @@ async function openTerminal(preset) {
         }
       }
     }, 200);
-  });
+  };
 
+  // 保存引用以便清理
+  term._handleResize = handleResize;
+  term._handleMinimized = handleMinimized;
+  term._handleRestored = handleRestored;
+
+  ipcRenderer.on('window-minimized', handleMinimized);
+  ipcRenderer.on('window-restored', handleRestored);
   ipcRenderer.on('window-resized', handleResize);
 
   // 返回终端 ID 供恢复会话使用
@@ -2172,10 +2157,19 @@ async function closeTerminal(id) {
     term._resizeTimeout = null;
   }
 
-  // 移除 IPC 监听器
-  ipcRenderer.removeAllListeners('window-minimized');
-  ipcRenderer.removeAllListeners('window-restored');
-  ipcRenderer.removeAllListeners('window-resized');
+  // 移除 IPC 监听器（只移除当前终端的）
+  if (term._handleResize) {
+    ipcRenderer.removeListener('window-resized', term._handleResize);
+    term._handleResize = null;
+  }
+  if (term._handleMinimized) {
+    ipcRenderer.removeListener('window-minimized', term._handleMinimized);
+    term._handleMinimized = null;
+  }
+  if (term._handleRestored) {
+    ipcRenderer.removeListener('window-restored', term._handleRestored);
+    term._handleRestored = null;
+  }
 
   // 关闭 PTY 进程
   try {
