@@ -3,6 +3,15 @@ const { Terminal } = require('@xterm/xterm');
 const { FitAddon } = require('@xterm/addon-fit');
 const { Unicode11Addon } = require('@xterm/addon-unicode11');
 
+// 防抖函数（用于优化频繁调用的事件）
+function debounce(fn, delay) {
+  let timer = null;
+  return function(...args) {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => fn.apply(this, args), delay);
+  };
+}
+
 // 剪贴板辅助函数（使用 Electron 原生 clipboard，避免 navigator.clipboard 在无 admin 权限时失效）
 async function clipboardWrite(text) {
   return ipcRenderer.invoke('clipboard-write', text);
@@ -1277,26 +1286,24 @@ async function openTerminal(preset) {
     },
     fontSize: 14,
     fontFamily: 'Consolas, "Courier New", monospace',
-    cursorBlink: true,
+    cursorBlink: false,  // 禁用光标闪烁，减少渲染
     cursorStyle: 'block',
-    scrollback: 10000,
+    scrollback: 5000,  // 减少回滚行数，降低内存
     tabStopWidth: 4,
-    drawBoldTextInBrightColors: true,
+    drawBoldTextInBrightColors: false,  // 禁用粗体亮色，减少渲染计算
     allowTransparency: false,
-    lineHeight: 1.0,
-    convertEol: true,  // 修复：正确处理换行，防止长内容移位
+    lineHeight: 1.1,  // 稍微增加行高，改善可读性
+    convertEol: true,
     termName: 'xterm-256color',
-    // 允许选中文本
     disableStdin: false,
     screenReaderMode: false,
-    // 确保正确处理所有键盘事件
     macOptionIsMeta: false,
     macOptionClickForcesSelection: false,
-    altClickMovesCursor: true,
-    // 启用 IME 支持(中文输入)
+    altClickMovesCursor: false,  // 禁用 alt 点击移动光标
     overviewRulerWidth: 0,
-    // 启用 proposed API（解决 "You must set the allowProposedApi option to true" 错误）
     allowProposedApi: true,
+    fastScrollModifier: 'alt',  // 快速滚动修饰键
+    scrollSensitivity: 1,  // 滚动灵敏度
   });
 
   // Unicode11 addon 帮助正确处理 emoji 等宽字符的宽度
@@ -1356,9 +1363,23 @@ async function openTerminal(preset) {
   });
 
   // 添加右键菜单
+  // 1. 在 mousedown 捕获阶段提前获取并复制选中文本
+  let cachedSelection = '';
+  wrapper.addEventListener('mousedown', (e) => {
+    if (e.button === 2) {
+      cachedSelection = terminal.getSelection();
+      // 如果有选中内容，立即复制，不阻断事件流
+      if (cachedSelection) {
+        clipboardWrite(cachedSelection).catch(() => {});
+      }
+    }
+  }, true);
+
   wrapper.addEventListener('contextmenu', (e) => {
     e.preventDefault();
-    const selection = terminal.getSelection();
+    // 使用缓存的选中内容（已在 mousedown 阶段捕获），如果为空则实时获取
+    const selection = cachedSelection || terminal.getSelection();
+    cachedSelection = '';
 
     // 创建右键菜单
     const menu = document.createElement('div');
@@ -2168,6 +2189,15 @@ async function closeTerminal(id) {
     clearTimeout(term._resizeTimer);
     term._resizeTimer = null;
   }
+  if (term._resizeTimeout) {
+    clearTimeout(term._resizeTimeout);
+    term._resizeTimeout = null;
+  }
+
+  // 移除 IPC 监听器
+  ipcRenderer.removeAllListeners('window-minimized');
+  ipcRenderer.removeAllListeners('window-restored');
+  ipcRenderer.removeAllListeners('window-resized');
 
   // 关闭 PTY 进程
   try {
@@ -2178,15 +2208,30 @@ async function closeTerminal(id) {
 
   // 移除 DOM 元素
   const wrapper = document.getElementById(`wrapper-${id}`);
-  if (wrapper) wrapper.remove();
+  if (wrapper) {
+    // 移除所有子元素的事件监听器
+    wrapper.innerHTML = '';
+    wrapper.remove();
+  }
   const sessionItem = document.getElementById(`session-${id}`);
   if (sessionItem) sessionItem.remove();
 
-  // 释放 Terminal 对象
+  // 释放 Terminal 对象（强制 dispose）
   try {
-    term.terminal.dispose();
+    if (term.terminal && !term.terminal._disposed) {
+      term.terminal._disposed = true;
+      term.terminal.dispose();
+    }
   } catch (e) {
     console.error('[Renderer] Terminal dispose 失败:', e.message);
+  }
+
+  // 清理 FitAddon
+  if (term.fitAddon) {
+    try {
+      term.fitAddon.dispose();
+    } catch (_) {}
+    term.fitAddon = null;
   }
 
   // 从 Map 中删除
@@ -2226,22 +2271,17 @@ function startMonitor() {
   
   monitorInterval = setInterval(async () => {
     try {
-      // 获取健康状态
       const health = await ipcRenderer.invoke('health-check');
       healthStatus = health;
-      
-      // 更新界面状态显示
       updateStatusDisplay();
       
-      // 如果状态为警告或严重，显示提示
       if (health.status === 'warning' || health.status === 'critical') {
         showStatusWarning(health);
       }
-      
     } catch (e) {
       console.error('[Renderer] 监控失败:', e.message);
     }
-  }, 120000); // 每2分钟检查一次
+  }, 300000); // 每5分钟检查一次（降低频率）
   
   console.log('[Renderer] 监控已启动');
 }
@@ -2438,50 +2478,54 @@ ${health.recommendations.length > 0
   }
 }
 
+// 缓存上一次活动的终端 ID，避免重复 DOM 查询
+let lastActiveWrapperId = null;
+
 // 优化终端切换
 function optimizeTerminalSwitch(id) {
-  const startTime = performance.now();
-  
   const term = terminals.get(id);
-  if (term) {
-    const wrapper = document.getElementById(`wrapper-${id}`);
-    const sessionItem = document.getElementById(`session-${id}`);
-    
-    if (wrapper) {
-      // 隐藏所有其他终端
-      terminals.forEach((t, termId) => {
-        const w = document.getElementById(`wrapper-${termId}`);
-        const s = document.getElementById(`session-${termId}`);
-        if (w) w.style.display = 'none';
-        if (s) s.classList.remove('active');
-      });
-      
-      wrapper.style.display = 'block';
-      if (sessionItem) sessionItem.classList.add('active');
-      
-      // 关键修复：延迟聚焦到 rAF，确保浏览器完成布局后再 focus
-      // 这样可以保证 xterm 的 textarea 已在 DOM 中且位置正确
-      requestAnimationFrame(() => {
-        try {
-          term.fitAddon.fit();
-          const dims = term.fitAddon.proposeDimensions();
-          if (dims && dims.cols && dims.rows) {
-            const safeCols = Math.max(20, Math.min(dims.cols, 500));
-            const safeRows = Math.max(5, Math.min(dims.rows, 200));
-            ipcRenderer.invoke('resize-terminal', {
-              id: term.ptyId,
-              cols: safeCols,
-              rows: safeRows
-            });
-          }
-        } catch (e) {
-          console.error('[Renderer] fit 失败:', e.message);
-        }
-        // fit 之后再聚焦，确保 IME textarea 可用
-        term.terminal.focus();
-      });
+  if (!term) return;
+  
+  const wrapper = document.getElementById(`wrapper-${id}`);
+  const sessionItem = document.getElementById(`session-${id}`);
+  
+  if (!wrapper) return;
+  
+  // 只隐藏非当前终端（优化：不查询已隐藏的）
+  terminals.forEach((t, termId) => {
+    if (termId !== id) {
+      const w = document.getElementById(`wrapper-${termId}`);
+      if (w && w.style.display !== 'none') w.style.display = 'none';
+      const s = document.getElementById(`session-${termId}`);
+      if (s && s.classList.contains('active')) s.classList.remove('active');
     }
+  });
+  
+  // 显示当前终端
+  wrapper.style.display = 'block';
+  if (sessionItem && !sessionItem.classList.contains('active')) {
+    sessionItem.classList.add('active');
   }
+  
+  // 使用 requestAnimationFrame 确保布局完成后操作
+  requestAnimationFrame(() => {
+    try {
+      term.fitAddon.fit();
+      const dims = term.fitAddon.proposeDimensions();
+      if (dims && dims.cols && dims.rows) {
+        const safeCols = Math.max(20, Math.min(dims.cols, 500));
+        const safeRows = Math.max(5, Math.min(dims.rows, 200));
+        ipcRenderer.invoke('resize-terminal', {
+          id: term.ptyId,
+          cols: safeCols,
+          rows: safeRows
+        });
+      }
+    } catch (e) {
+      console.error('[Renderer] fit 失败:', e.message);
+    }
+    term.terminal.focus();
+  });
 }
 
 // 在创建新终端前检查限制
