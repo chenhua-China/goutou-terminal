@@ -268,6 +268,7 @@ function createWindow() {
       const [width, height] = mainWindow.getContentSize();
       // 窗口内容区域太小时不触发 resize，避免 PTY 崩溃
       if (width >= 200 && height >= 100) {
+        console.log(`[Main] 窗口 resize: ${width}x${height}`);
         mainWindow.webContents.send('window-resized');
       }
     }

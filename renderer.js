@@ -12,25 +12,14 @@ function debounce(fn, delay) {
   };
 }
 
-// 剪贴板辅助函数（优化：先尝试 navigator.clipboard，失败再使用 IPC）
+// 剪贴板辅助函数（使用 Electron 原生 clipboard，避免 navigator.clipboard 在无 admin 权限时失效）
 async function clipboardWrite(text) {
-  try {
-    await navigator.clipboard.writeText(text);
-    return { success: true };
-  } catch (_) {
-    return ipcRenderer.invoke('clipboard-write', text);
-  }
+  return ipcRenderer.invoke('clipboard-write', text);
 }
 
 async function clipboardRead() {
-  try {
-    // 优先使用 navigator.clipboard（更快，无 IPC 延迟）
-    const text = await navigator.clipboard.readText();
-    return { success: true, text };
-  } catch (_) {
-    // 回退到 IPC 调用
-    return ipcRenderer.invoke('clipboard-read');
-  }
+  const result = await ipcRenderer.invoke('clipboard-read');
+  return result.success ? result.text : '';
 }
 
 // 状态管理
@@ -110,6 +99,47 @@ async function init() {
 
   // 启动监控
   startMonitor();
+  
+  // 全局注册窗口事件监听器（在 init 时只注册一次）
+  let globalIsMinimized = false;
+  ipcRenderer.on('window-minimized', () => {
+    console.log('[Renderer] 全局: 收到 window-minimized');
+    globalIsMinimized = true;
+  });
+  
+  ipcRenderer.on('window-restored', () => {
+    console.log('[Renderer] 全局: 收到 window-restored');
+    globalIsMinimized = false;
+  });
+  
+  ipcRenderer.on('window-resized', () => {
+    console.log('[Renderer] 全局: 收到 window-resized');
+    // 触发当前活动终端的 resize
+    if (activeTerminalId) {
+      const term = terminals.get(activeTerminalId);
+      if (term && !globalIsMinimized) {
+        try {
+          const wrapper = document.getElementById(`wrapper-${activeTerminalId}`);
+          if (wrapper) {
+            const rect = wrapper.getBoundingClientRect();
+            if (rect.width >= 100 && rect.height >= 50) {
+              term.fitAddon.fit();
+              const dims = term.fitAddon.proposeDimensions();
+              if (dims && dims.cols && dims.rows) {
+                ipcRenderer.invoke('resize-terminal', {
+                  id: term.ptyId,
+                  cols: Math.max(20, Math.min(dims.cols, 500)),
+                  rows: Math.max(5, Math.min(dims.rows, 200))
+                });
+              }
+            }
+          }
+        } catch (e) {
+          console.error('[Renderer] resize 失败:', e.message);
+        }
+      }
+    }
+  });
   
   // 设置拖拽排序
   setupSessionDrag();
@@ -1284,8 +1314,8 @@ async function openTerminal(preset) {
     tabStopWidth: 4,
     drawBoldTextInBrightColors: false,  // 禁用粗体亮色，减少渲染计算
     allowTransparency: false,
-    lineHeight: 1.1,  // 稍微增加行高，改善可读性
-    convertEol: true,
+    lineHeight: 1.0,  // 标准行高
+    convertEol: false,  // 让终端自己处理换行，避免双重换行
     termName: 'xterm-256color',
     disableStdin: false,
     screenReaderMode: false,
@@ -1433,9 +1463,9 @@ async function openTerminal(preset) {
     pasteItem.addEventListener('mouseleave', () => {
       pasteItem.style.background = 'transparent';
     });
-    pasteItem.addEventListener('click', async () => {
-      try {
-        const text = await clipboardRead();
+    pasteItem.addEventListener('click', () => {
+      // 和 Ctrl+Shift+V 快捷键完全一样的逻辑
+      clipboardRead().then(text => {
         if (text) {
           // CMD 终端需要 \r\n 换行，其他终端保持原样
           const term = terminals.get(ptyId);
@@ -1443,11 +1473,10 @@ async function openTerminal(preset) {
           const normalizedText = isCmd ? text.replace(/\r?\n/g, '\r\n') : text;
           ipcRenderer.invoke('write-terminal', { id: ptyId, data: normalizedText });
         }
-      } catch (err) {
+      }).catch(err => {
         console.error('[Renderer] 粘贴失败:', err);
-      }
+      });
       menu.remove();
-      // 粘贴完成后同步重新聚焦到当前终端
       restoreFocusToTerminal();
     });
     menu.appendChild(pasteItem);
@@ -1573,13 +1602,20 @@ async function openTerminal(preset) {
   // 窗口 resize 时调整终端大小（通过主进程事件，避免最小化时触发）
   let isWindowMinimized = false;
 
-  // 保存防抖函数引用以便清理
+  // 保存防抖函数引用以便清理（优化：100ms 防抖，平衡性能和响应速度）
   const handleResize = debounce(() => {
-    if (isWindowMinimized || activeTerminalId !== id) return;
+    if (isWindowMinimized || activeTerminalId !== id) {
+      console.log(`[Renderer] resize 忽略: minimized=${isWindowMinimized}, activeId=${activeTerminalId}, id=${id}`);
+      return;
+    }
     
+    console.log(`[Renderer] resize 处理: id=${id}`);
     try {
       const wrapperRect = wrapper.getBoundingClientRect();
-      if (wrapperRect.width < 100 || wrapperRect.height < 50) return;
+      if (wrapperRect.width < 100 || wrapperRect.height < 50) {
+        console.log(`[Renderer] resize 忽略: 容器太小 ${wrapperRect.width}x${wrapperRect.height}`);
+        return;
+      }
       
       fitAddon.fit();
       const newDims = fitAddon.proposeDimensions();
@@ -1595,7 +1631,7 @@ async function openTerminal(preset) {
     } catch (e) {
       console.error('[Renderer] resize 处理失败:', e.message);
     }
-  }, 300);
+  }, 100);  // 降低到 100ms，提高响应速度
 
   // 窗口最小化处理
   const handleMinimized = () => { isWindowMinimized = true; };
@@ -1622,14 +1658,32 @@ async function openTerminal(preset) {
     }, 200);
   };
 
+  // 使用 ResizeObserver 监听终端容器尺寸变化，自动触发 fit
+  const containerObserver = new ResizeObserver(entries => {
+    if (!activeTerminalId) return;
+    const term = terminals.get(activeTerminalId);
+    if (!term) return;
+    
+    try {
+      term.fitAddon.fit();
+      const dims = term.fitAddon.proposeDimensions();
+      if (dims && dims.cols && dims.rows) {
+        ipcRenderer.invoke('resize-terminal', {
+          id: term.ptyId,
+          cols: Math.max(20, Math.min(dims.cols, 500)),
+          rows: Math.max(5, Math.min(dims.rows, 200))
+        });
+      }
+    } catch (e) {
+      console.error('[Renderer] resize 失败:', e.message);
+    }
+  });
+  
+  // 观察 terminalContainer 的尺寸变化
+  containerObserver.observe(terminalContainer);
+  
   // 保存引用以便清理
-  term._handleResize = handleResize;
-  term._handleMinimized = handleMinimized;
-  term._handleRestored = handleRestored;
-
-  ipcRenderer.on('window-minimized', handleMinimized);
-  ipcRenderer.on('window-restored', handleRestored);
-  ipcRenderer.on('window-resized', handleResize);
+  term._containerObserver = containerObserver;
 
   // 返回终端 ID 供恢复会话使用
   // 更新状态显示
@@ -2169,6 +2223,14 @@ async function closeTerminal(id) {
   if (term._handleRestored) {
     ipcRenderer.removeListener('window-restored', term._handleRestored);
     term._handleRestored = null;
+  }
+  
+  // 清理 ResizeObserver
+  if (term._containerObserver) {
+    try {
+      term._containerObserver.disconnect();
+    } catch (_) {}
+    term._containerObserver = null;
   }
 
   // 关闭 PTY 进程
