@@ -12,14 +12,25 @@ function debounce(fn, delay) {
   };
 }
 
-// 剪贴板辅助函数（使用 Electron 原生 clipboard，避免 navigator.clipboard 在无 admin 权限时失效）
+// 剪贴板辅助函数（优化：先尝试 navigator.clipboard，失败再使用 IPC）
 async function clipboardWrite(text) {
-  return ipcRenderer.invoke('clipboard-write', text);
+  try {
+    await navigator.clipboard.writeText(text);
+    return { success: true };
+  } catch (_) {
+    return ipcRenderer.invoke('clipboard-write', text);
+  }
 }
 
 async function clipboardRead() {
-  const result = await ipcRenderer.invoke('clipboard-read');
-  return result.success ? result.text : '';
+  try {
+    // 优先使用 navigator.clipboard（更快，无 IPC 延迟）
+    const text = await navigator.clipboard.readText();
+    return { success: true, text };
+  } catch (_) {
+    // 回退到 IPC 调用
+    return ipcRenderer.invoke('clipboard-read');
+  }
 }
 
 // 状态管理
@@ -1570,36 +1581,50 @@ async function openTerminal(preset) {
   if (!preset.skipActivate) {
     activateTerminal(id);
 
-    // 分两次 fit：第一次立即执行，第二次等布局稳定后再执行
-    const fitAndFocus = () => {
-      wrapper.style.display = 'block';
-      // 关键修复：先显示，等浏览器布局完成后再 fit
-      requestAnimationFrame(() => {
-        fitAddon.fit();
-        terminal.focus();
-      });
-    };
+    // 优化：只调用一次 fit，减少渲染负担
+    wrapper.style.display = 'block';
     requestAnimationFrame(() => {
-      fitAndFocus();
-      setTimeout(() => {
-        fitAndFocus();
-        console.log('[Renderer] 终端刷新完成');
-      }, 150);
+      fitAddon.fit();
+      terminal.focus();
     });
   }
 
   // 窗口 resize 时调整终端大小（通过主进程事件，避免最小化时触发）
-  let resizeTimeout;
   let isWindowMinimized = false;
+
+  // 保存防抖函数引用以便清理
+  const handleResize = debounce(() => {
+    if (isWindowMinimized || activeTerminalId !== id) return;
+    
+    try {
+      const wrapperRect = wrapper.getBoundingClientRect();
+      if (wrapperRect.width < 100 || wrapperRect.height < 50) return;
+      
+      fitAddon.fit();
+      const newDims = fitAddon.proposeDimensions();
+      const safeCols = Math.max(20, Math.min(newDims.cols || 80, 500));
+      const safeRows = Math.max(5, Math.min(newDims.rows || 24, 200));
+      if (safeCols > 0 && safeRows > 0) {
+        ipcRenderer.invoke('resize-terminal', {
+          id: ptyId,
+          cols: safeCols,
+          rows: safeRows
+        });
+      }
+    } catch (e) {
+      console.error('[Renderer] resize 处理失败:', e.message);
+    }
+  }, 300);
+
+  // 保存引用以便清理
+  term._handleResize = handleResize;
 
   ipcRenderer.on('window-minimized', () => {
     isWindowMinimized = true;
-    clearTimeout(resizeTimeout);
   });
 
   ipcRenderer.on('window-restored', () => {
     isWindowMinimized = false;
-    // 恢复后延迟 resize，确保布局已完成
     setTimeout(() => {
       if (activeTerminalId === id) {
         try {
@@ -1616,57 +1641,10 @@ async function openTerminal(preset) {
           console.error('[Renderer] 恢复后 resize 失败:', e.message);
         }
       }
-      // 修复窗口恢复后输入法失效和复制粘贴无响应的问题
-      // 通过 blur → focus 循环重新激活 xterm 的 IME composition 状态
-      const wrapper = document.getElementById(`wrapper-${id}`);
-      if (wrapper) {
-        const ta = wrapper.querySelector('.xterm-helper-textarea');
-        if (ta) {
-          ta.readOnly = false;
-          ta.disabled = false;
-        }
-      }
-      if (activeTerminalId === id) {
-        terminal.blur();
-        setTimeout(() => {
-          terminal.focus();
-          console.log('[Renderer] 窗口恢复：终端 IME 状态已修复');
-        }, 100);
-      }
     }, 200);
   });
 
-  ipcRenderer.on('window-resized', () => {
-    if (isWindowMinimized) return;
-    if (activeTerminalId === id) {
-      clearTimeout(resizeTimeout);
-      resizeTimeout = setTimeout(async () => {
-        try {
-          // 检查容器是否可见且有合理尺寸
-          const wrapperRect = wrapper.getBoundingClientRect();
-          if (wrapperRect.width < 100 || wrapperRect.height < 50) {
-            return;
-          }
-          fitAddon.fit();
-          const newDims = fitAddon.proposeDimensions();
-          const safeCols = Math.max(20, Math.min(newDims.cols || 80, 500));
-          const safeRows = Math.max(5, Math.min(newDims.rows || 24, 200));
-          if (safeCols > 0 && safeRows > 0) {
-            const result = await ipcRenderer.invoke('resize-terminal', {
-              id: ptyId,
-              cols: safeCols,
-              rows: safeRows
-            });
-            if (!result.success) {
-              console.error('[Renderer] resize-terminal 失败:', result.error);
-            }
-          }
-        } catch (e) {
-          console.error('[Renderer] resize 处理失败:', e.message);
-        }
-      }, 150);
-    }
-  });
+  ipcRenderer.on('window-resized', handleResize);
 
   // 返回终端 ID 供恢复会话使用
   // 更新状态显示
