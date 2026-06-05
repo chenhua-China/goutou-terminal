@@ -12,14 +12,24 @@ function debounce(fn, delay) {
   };
 }
 
-// 剪贴板辅助函数（使用 Electron 原生 clipboard，避免 navigator.clipboard 在无 admin 权限时失效）
+// 剪贴板辅助函数：优先使用系统 clipboard，无权限时降级到 IPC
 async function clipboardWrite(text) {
-  return ipcRenderer.invoke('clipboard-write', text);
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (_) {
+    // 无权限或失败时，使用 Electron IPC
+    await ipcRenderer.invoke('clipboard-write', text);
+  }
 }
 
 async function clipboardRead() {
-  const result = await ipcRenderer.invoke('clipboard-read');
-  return result.success ? result.text : '';
+  try {
+    return await navigator.clipboard.readText();
+  } catch (_) {
+    // 无权限或失败时，使用 Electron IPC
+    const result = await ipcRenderer.invoke('clipboard-read');
+    return result.success ? result.text : '';
+  }
 }
 
 // 状态管理
@@ -1464,20 +1474,18 @@ async function openTerminal(preset) {
       pasteItem.style.background = 'transparent';
     });
     pasteItem.addEventListener('click', () => {
-      // 和 Ctrl+Shift+V 快捷键完全一样的逻辑
+      menu.remove();
+      // 优化：直接使用终端实例的 ptyId，避免延迟查找
+      const term = terminals.get(ptyId);
+      const isCmd = term && term.preset && term.preset.shell.includes('cmd');
+      
+      // 优化：先读取剪贴板，再处理
       clipboardRead().then(text => {
         if (text) {
-          // CMD 终端需要 \r\n 换行，其他终端保持原样
-          const term = terminals.get(ptyId);
-          const isCmd = term && term.preset && term.preset.shell.includes('cmd');
           const normalizedText = isCmd ? text.replace(/\r?\n/g, '\r\n') : text;
           ipcRenderer.invoke('write-terminal', { id: ptyId, data: normalizedText });
         }
-      }).catch(err => {
-        console.error('[Renderer] 粘贴失败:', err);
       });
-      menu.remove();
-      restoreFocusToTerminal();
     });
     menu.appendChild(pasteItem);
 
