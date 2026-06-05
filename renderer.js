@@ -1373,7 +1373,7 @@ async function openTerminal(preset) {
   const wrapper = document.createElement('div');
   wrapper.className = 'terminal-wrapper';
   wrapper.id = `wrapper-${id}`;
-  wrapper.setAttribute('tabindex', '0');
+  // 移除 tabindex，避免 wrapper div 抢夺 xterm textarea 的焦点
   terminalContainer.appendChild(wrapper);
 
   // 不要设置 inline style,完全让 CSS 控制定位和显示
@@ -1385,12 +1385,14 @@ async function openTerminal(preset) {
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       terminal.open(wrapper);
-      // open 后立即强制聚焦，确保 IME 和输入框可用
-      forceTerminalFocus(terminal, wrapper);
 
-      // open 后再等一帧才 fit
+      // open 后再等一帧才 fit 和聚焦
       requestAnimationFrame(() => {
         fitAddon.fit();
+        // 延迟聚焦，确保 xterm 内部 DOM 完全渲染
+        setTimeout(() => {
+          forceTerminalFocus(terminal, wrapper);
+        }, 50);
       });
     });
   });
