@@ -1100,22 +1100,31 @@ function focusActiveTerminal() {
     const term = terminals.get(activeTerminalId);
     if (term) {
       requestAnimationFrame(() => {
-        term.terminal.focus();
+        const wrapper = document.getElementById(`wrapper-${activeTerminalId}`);
+        forceTerminalFocus(term.terminal, wrapper);
       });
     }
   }
 }
 
-// 模态框关闭后同步恢复焦点到终端（不需要延迟）
+// 强制终端聚焦（解决 Electron 下无法输入的问题）
+function forceTerminalFocus(terminal, wrapper) {
+  terminal.focus();
+  const ta = wrapper?.querySelector('.xterm-helper-textarea');
+  if (ta) {
+    ta.focus();
+    ta.readOnly = false;
+    ta.disabled = false;
+  }
+}
+
+// 模态框关闭后同步恢复焦点到终端
 function restoreFocusToTerminal() {
   if (activeTerminalId) {
     const term = terminals.get(activeTerminalId);
     if (term) {
-      // 先点击 wrapper 确保浏览器识别当前活动元素
       const wrapper = document.getElementById(`wrapper-${activeTerminalId}`);
-      if (wrapper) wrapper.focus();
-      // 同步聚焦 xterm textarea
-      term.terminal.focus();
+      forceTerminalFocus(term.terminal, wrapper);
     }
   }
 }
@@ -1376,13 +1385,12 @@ async function openTerminal(preset) {
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       terminal.open(wrapper);
-      // open 后立即聚焦，让 IME 立即生效
-      terminal.focus();
+      // open 后立即强制聚焦，确保 IME 和输入框可用
+      forceTerminalFocus(terminal, wrapper);
 
       // open 后再等一帧才 fit
       requestAnimationFrame(() => {
         fitAddon.fit();
-        console.log('[Renderer] 终端已 open 并 fit');
       });
     });
   });
@@ -2566,7 +2574,8 @@ function optimizeTerminalSwitch(id) {
     } catch (e) {
       console.error('[Renderer] fit 失败:', e.message);
     }
-    term.terminal.focus();
+    // fit 之后再强制聚焦，确保 IME textarea 可用
+    forceTerminalFocus(term.terminal, wrapper);
   });
 }
 
