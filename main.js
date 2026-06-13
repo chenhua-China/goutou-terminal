@@ -4,7 +4,6 @@ const os = require('os');
 const fs = require('fs');
 
 let mainWindow;
-let focusInitialized = false;
 const terminals = new Map();
 
 // 终端数量限制（最多10个）
@@ -208,7 +207,8 @@ function createWindow() {
     width: 1400,
     height: 900,
     show: false,
-    focusable: true,  // 明确声明窗口可聚焦
+    focusable: true,
+    alwaysOnTop: false,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
@@ -217,29 +217,20 @@ function createWindow() {
 
   mainWindow.loadFile('index.html');
 
-  // 窗口准备好后显示并强制聚焦（多次尝试）
+  // 窗口准备好后显示并强制聚焦
   mainWindow.once('ready-to-show', () => {
+    // 关键修复：先 show() 再 focus()，并设置 alwaysOnTop 短暂置顶确保 OS 授予焦点
     mainWindow.show();
-    mainWindow.moveTop();
+    mainWindow.setAlwaysOnTop(true, 'screen-saver');
+    mainWindow.focus();
+    mainWindow.webContents.focus();
     
-    // 多次尝试强制聚焦
-    const forceFocus = () => {
+    // 100ms 后恢复 alwaysOnTop
+    setTimeout(() => {
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.focus();
-        mainWindow.webContents.focus();
-        mainWindow.flashFrame(true);  // 闪烁任务栏，触发焦点
-        setTimeout(() => {
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.flashFrame(false);
-          }
-        }, 200);
+        mainWindow.setAlwaysOnTop(false);
       }
-    };
-    
-    forceFocus();
-    setTimeout(forceFocus, 50);
-    setTimeout(forceFocus, 200);
-    setTimeout(forceFocus, 500);
+    }, 100);
     
     console.log('[Main] 窗口已显示并尝试聚焦');
   });
@@ -247,6 +238,9 @@ function createWindow() {
   // 监听窗口获得焦点的事件
   mainWindow.on('focus', () => {
     console.log('[Main] 窗口获得焦点');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window-focused');
+    }
   });
 
   mainWindow.on('minimize', () => {
@@ -1020,7 +1014,31 @@ ipcMain.handle('get-realtime-memory', () => {
   }
 });
 
-// 聚焦窗口（解决弹窗输入框无法输入的焦点问题）
+// 聚焦窗口，不发送模拟点击
+ipcMain.handle('focus-window-noclick', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.show();
+  mainWindow.focus();
+  mainWindow.webContents.focus();
+  mainWindow.moveTop();
+});
+
+// 切窗口：hide→show→focus，等同于 Alt+Tab 再切回来的效果
+ipcMain.handle('focus-cycle', () => {
+  return new Promise((resolve) => {
+    if (!mainWindow || mainWindow.isDestroyed()) { resolve(); return; }
+    mainWindow.hide();
+    setTimeout(() => {
+      mainWindow.show();
+      mainWindow.focus();
+      mainWindow.webContents.focus();
+      mainWindow.moveTop();
+      setTimeout(resolve, 100);
+    }, 100);
+  });
+});
+
+// 聚焦窗口（解决终端无法输入的问题）
 ipcMain.handle('focus-window', (event, coords) => {
   return new Promise((resolve) => {
     if (!mainWindow || mainWindow.isDestroyed()) {
@@ -1028,37 +1046,18 @@ ipcMain.handle('focus-window', (event, coords) => {
       return;
     }
 
-    const doFocusSequence = () => {
-      mainWindow.focus();
-      mainWindow.webContents.focus();
-      mainWindow.moveTop();
-      mainWindow.setAlwaysOnTop(true, 'screen-saver');
-      setTimeout(() => {
-        if (!mainWindow || mainWindow.isDestroyed()) { resolve(); return; }
-        if (coords) {
-          mainWindow.webContents.sendInputEvent({ type: 'mouseMove', x: coords.x, y: coords.y, button: 'left' });
-          mainWindow.webContents.sendInputEvent({ type: 'mouseDown', x: coords.x, y: coords.y, button: 'left', clickCount: 1 });
-          mainWindow.webContents.sendInputEvent({ type: 'mouseUp', x: coords.x, y: coords.y, button: 'left', clickCount: 1 });
-        }
-        setTimeout(() => {
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.setAlwaysOnTop(false);
-            mainWindow.webContents.focus();
-          }
-          resolve();
-        }, 80);
-      }, 150);
-    };
-
-    if (!focusInitialized) {
-      // 首次弹窗：先 blur 再 focus，强制 OS 重新授予键盘焦点（会有一次短暂闪烁）
-      focusInitialized = true;
-      mainWindow.blur();
-      setTimeout(doFocusSequence, 60);
-    } else {
-      // 后续弹窗：窗口已有 OS 焦点，直接聚焦即可（无闪烁）
-      doFocusSequence();
+    // 简单直接的聚焦：不使用 blur，避免丢失 OS 焦点
+    mainWindow.focus();
+    mainWindow.webContents.focus();
+    mainWindow.moveTop();
+    
+    if (coords) {
+      mainWindow.webContents.sendInputEvent({ type: 'mouseMove', x: coords.x, y: coords.y, button: 'left' });
+      mainWindow.webContents.sendInputEvent({ type: 'mouseDown', x: coords.x, y: coords.y, button: 'left', clickCount: 1 });
+      mainWindow.webContents.sendInputEvent({ type: 'mouseUp', x: coords.x, y: coords.y, button: 'left', clickCount: 1 });
     }
+    
+    resolve();
   });
 });
 

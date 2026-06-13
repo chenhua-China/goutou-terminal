@@ -120,8 +120,29 @@ async function init() {
   ipcRenderer.on('window-restored', () => {
     console.log('[Renderer] 全局: 收到 window-restored');
     globalIsMinimized = false;
+    if (activeTerminalId) {
+      const term = terminals.get(activeTerminalId);
+      if (term) {
+        const wrapper = document.getElementById(`wrapper-${activeTerminalId}`);
+        if (wrapper) {
+          setTimeout(() => forceTerminalFocus(term.terminal, wrapper), 200);
+        }
+      }
+    }
   });
   
+  ipcRenderer.on('window-focused', () => {
+    if (activeTerminalId) {
+      const term = terminals.get(activeTerminalId);
+      if (term) {
+        const wrapper = document.getElementById(`wrapper-${activeTerminalId}`);
+        if (wrapper) {
+          setTimeout(() => forceTerminalFocus(term.terminal, wrapper), 100);
+        }
+      }
+    }
+  });
+
   ipcRenderer.on('window-resized', () => {
     console.log('[Renderer] 全局: 收到 window-resized');
     // 触发当前活动终端的 resize
@@ -295,70 +316,39 @@ async function restoreSessionOnStartup() {
       // 询问用户是否恢复
       const shouldRestore = confirm(`发现 ${savedSessions.length} 个上次保存的会话\n\n是否恢复这些会话？\n（点击"取消"将清除所有会话）`);
       
+      await ipcRenderer.invoke('focus-window-noclick');
+      await new Promise(r => setTimeout(r, 100));
+      
       if (shouldRestore) {
         // 恢复会话
         for (const session of savedSessions) {
           console.log('[Renderer] 恢复会话:', session.name);
           
-          // 使用 restore 模式创建终端
           await openTerminal({
             shell: session.shell,
             cwd: session.cwd,
             icon: session.icon,
-            name: session.name,  // 使用保存的别名
+            name: session.name,
             script: session.script || '',
             restore: true,
-            skipActivate: true,  // 先不激活，最后再激活第一个
+            skipActivate: true,
           });
         }
         
-        // 恢复完成后，激活第一个终端
         if (terminals.size > 0) {
-          // 隐藏欢迎页面
           if (emptyState) emptyState.style.display = 'none';
           
           const firstId = Array.from(terminals.keys())[0];
-          // 延迟激活以确保焦点正确同步（解决输入法问题）
-          setTimeout(() => {
+          setTimeout(async () => {
             activateTerminal(firstId);
             console.log('[Renderer] 会话恢复完成，已激活第一个终端');
-            // 使用 OS 级聚焦修复终端 IME 状态（与快捷窗口相同的方式）
-            const fixTerminalIME = async () => {
-              const term = terminals.get(firstId);
-              if (!term || !term.terminal) return;
-              
+            await ipcRenderer.invoke('focus-cycle');
+            const term = terminals.get(firstId);
+            if (term) {
               const wrapper = document.getElementById(`wrapper-${firstId}`);
-              if (!wrapper) return;
-              
-              const ta = wrapper.querySelector('.xterm-helper-textarea');
-              if (ta) {
-                ta.readOnly = false;
-                ta.disabled = false;
-              }
-              
-              // 计算终端中心坐标
-              const rect = wrapper.getBoundingClientRect();
-              const coords = rect.width > 0 && rect.height > 0
-                ? { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) }
-                : null;
-              
-              // 关键：调用主进程的 OS 级聚焦，刷新 IME composition 上下文
-              await ipcRenderer.invoke('focus-window', coords);
-              
-              // 等待渲染完成
-              await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-              
-              // 聚焦终端
-              term.terminal.focus();
-              if (ta) ta.focus();
-              
-              console.log('[Renderer] 终端 IME 状态已修复（OS 级聚焦）');
-            };
-            fixTerminalIME();
-            // 再次确保修复
-            setTimeout(fixTerminalIME, 300);
-          }, 300);
-          // 更新状态显示
+              forceTerminalFocus(term.terminal, wrapper);
+            }
+          }, 500);
           updateHealthStatus();
         }
       } else {
@@ -1109,6 +1099,9 @@ function focusActiveTerminal() {
 
 // 强制终端聚焦（解决 Electron 下无法输入的问题）
 function forceTerminalFocus(terminal, wrapper) {
+  if (document.activeElement && document.activeElement !== document.body) {
+    document.activeElement.blur();
+  }
   terminal.focus();
   const ta = wrapper?.querySelector('.xterm-helper-textarea');
   if (ta) {
@@ -1373,6 +1366,8 @@ async function openTerminal(preset) {
   const wrapper = document.createElement('div');
   wrapper.className = 'terminal-wrapper';
   wrapper.id = `wrapper-${id}`;
+  // 关键修复：在 open 之前先设置 display: block，让 xterm 在可见容器中初始化
+  wrapper.style.display = 'block';
   // 移除 tabindex，避免 wrapper div 抢夺 xterm textarea 的焦点
   terminalContainer.appendChild(wrapper);
 
@@ -1391,8 +1386,16 @@ async function openTerminal(preset) {
         fitAddon.fit();
         // 延迟聚焦，确保 xterm 内部 DOM 完全渲染
         setTimeout(() => {
-          forceTerminalFocus(terminal, wrapper);
-        }, 50);
+          const ta = wrapper.querySelector('.xterm-helper-textarea');
+          if (ta) {
+            // 强制移除可能干扰的属性
+            ta.removeAttribute('tabindex');
+            ta.style.pointerEvents = 'auto';
+            // 聚焦
+            ta.focus();
+            terminal.focus();
+          }
+        }, 100);
       });
     });
   });
@@ -1410,10 +1413,6 @@ async function openTerminal(preset) {
   wrapper.addEventListener('mousedown', (e) => {
     if (e.button === 2) {
       cachedSelection = terminal.getSelection();
-      // 如果有选中内容，立即复制，不阻断事件流
-      if (cachedSelection) {
-        clipboardWrite(cachedSelection).catch(() => {});
-      }
     }
   }, true);
 
@@ -1458,12 +1457,11 @@ async function openTerminal(preset) {
     });
     if (hasSelection) {
       copyItem.addEventListener('click', () => {
-        clipboardWrite(selection).then(() => {
-          console.log('[Renderer] 已复制到剪贴板');
-        }).catch(err => {
+        clipboardWrite(selection).catch(err => {
           console.error('[Renderer] 复制失败:', err);
         });
         menu.remove();
+        restoreFocusToTerminal();
       });
     }
     menu.appendChild(copyItem);
@@ -1485,16 +1483,15 @@ async function openTerminal(preset) {
     });
     pasteItem.addEventListener('click', () => {
       menu.remove();
-      // 优化：直接使用终端实例的 ptyId，避免延迟查找
       const term = terminals.get(ptyId);
       const isCmd = term && term.preset && term.preset.shell.includes('cmd');
       
-      // 优化：先读取剪贴板，再处理
       clipboardRead().then(text => {
         if (text) {
           const normalizedText = isCmd ? text.replace(/\r?\n/g, '\r\n') : text;
           ipcRenderer.invoke('write-terminal', { id: ptyId, data: normalizedText });
         }
+        restoreFocusToTerminal();
       });
     });
     menu.appendChild(pasteItem);
@@ -1548,13 +1545,10 @@ async function openTerminal(preset) {
 
     // 点击其他地方关闭菜单（用 mousedown 更早捕获，避免 click 被延迟）
     const closeMenu = (e) => {
-      // 如果点击的是菜单内部，不关闭
       if (menu.contains(e.target)) return;
       menu.remove();
       document.removeEventListener('mousedown', closeMenu);
-      // 关闭后焦点回到终端
-      const term = terminals.get(id);
-      if (term) term.terminal.focus();
+      restoreFocusToTerminal();
     };
     // 用 requestAnimationFrame 确保在下一帧才注册，避免当前右键事件被误捕获
     requestAnimationFrame(() => {
@@ -1615,6 +1609,10 @@ async function openTerminal(preset) {
       fitAddon.fit();
       terminal.focus();
     });
+  } else {
+    // skipActivate 模式：仍然需要设置 display: block，让 xterm 在可见容器中初始化
+    // 但通过 optimizeTerminalSwitch 来控制最终的显示/隐藏
+    wrapper.style.display = 'block';
   }
 
   // 窗口 resize 时调整终端大小（通过主进程事件，避免最小化时触发）
@@ -1701,7 +1699,8 @@ async function openTerminal(preset) {
   containerObserver.observe(terminalContainer);
   
   // 保存引用以便清理
-  term._containerObserver = containerObserver;
+  const termData = terminals.get(id);
+  if (termData) termData._containerObserver = containerObserver;
 
   // 返回终端 ID 供恢复会话使用
   // 更新状态显示
@@ -2132,24 +2131,46 @@ let shortcutHandled = false;
 
 function setupTerminalKeyHandler(terminal, ptyId) {
   terminal.attachCustomKeyEventHandler((event) => {
-    // Ctrl+Shift+C: 复制选中的文本
-    if (event.ctrlKey && event.shiftKey && (event.key === 'c' || event.key === 'C') && event.type === 'keydown') {
+    // Ctrl+C: 有选中时复制，无选中时发送中断信号（由 xterm 原生处理）
+    if (event.ctrlKey && !event.shiftKey && !event.altKey && (event.key === 'c' || event.key === 'C') && event.type === 'keydown') {
       const selection = terminal.getSelection();
       if (selection) {
-        clipboardWrite(selection).then(() => {
-          console.log('[Renderer] ✅ 已复制到剪贴板');
-        }).catch(err => {
-          console.error('[Renderer] ❌ 复制失败:', err);
+        clipboardWrite(selection).catch(err => {
+          console.error('[Renderer] 复制失败:', err);
         });
         return false;
       }
       return true;
     }
-    // Ctrl+Shift+V: 粘贴
+    // Ctrl+Shift+C: 强制复制选中的文本
+    if (event.ctrlKey && event.shiftKey && (event.key === 'c' || event.key === 'C') && event.type === 'keydown') {
+      const selection = terminal.getSelection();
+      if (selection) {
+        clipboardWrite(selection).catch(err => {
+          console.error('[Renderer] 复制失败:', err);
+        });
+        return false;
+      }
+      return true;
+    }
+    // Ctrl+V: 粘贴（手动读取剪贴板，避免 xterm 原生 paste 重复）
+    if (event.ctrlKey && !event.shiftKey && !event.altKey && (event.key === 'v' || event.key === 'V') && event.type === 'keydown') {
+      clipboardRead().then(text => {
+        if (text) {
+          const term = terminals.get(ptyId);
+          const isCmd = term && term.preset && term.preset.shell.includes('cmd');
+          const normalizedText = isCmd ? text.replace(/\r?\n/g, '\r\n') : text;
+          ipcRenderer.invoke('write-terminal', { id: ptyId, data: normalizedText });
+        }
+      }).catch(err => {
+        console.error('[Renderer] 粘贴失败:', err);
+      });
+      return false;
+    }
+    // Ctrl+Shift+V: 手动粘贴
     if (event.ctrlKey && event.shiftKey && (event.key === 'v' || event.key === 'V') && event.type === 'keydown') {
       clipboardRead().then(text => {
         if (text) {
-          // CMD 终端需要 \r\n 换行，其他终端保持原样
           const term = terminals.get(ptyId);
           const isCmd = term && term.preset && term.preset.shell.includes('cmd');
           const normalizedText = isCmd ? text.replace(/\r?\n/g, '\r\n') : text;
@@ -2788,7 +2809,7 @@ function renderQuickReplyList(filterText = '') {
               <span class="qr-template-submit ${t.autoSubmit ? 'auto' : 'manual'}">${t.autoSubmit ? '↵' : '手'}</span>
               <div class="qr-template-actions">
                 <button class="qr-action-btn" onclick="event.stopPropagation(); editTemplate('${t.id}')" title="编辑">✏️</button>
-                <button class="qr-action-btn" onclick="event.stopPropagation(); deleteTemplate('${t.id}')" title="删除">🗑️</button>
+                <button class="qr-action-btn" onclick="event.stopPropagation(); deleteQuickReplyTemplate('${t.id}')" title="删除">🗑️</button>
               </div>
             </div>`;
           }).join('')}
@@ -2870,13 +2891,13 @@ window.editTemplate = function(templateId) {
 };
 
 // 删除模板
-window.deleteTemplate = function(templateId) {
-  if (!confirm('确定要删除这个模板吗？')) return;
+  window.deleteQuickReplyTemplate = function(templateId) {
+    if (!confirm('确定要删除这个模板吗？')) return;
 
-  quickReplyData.templates = quickReplyData.templates.filter(t => t.id !== templateId);
-  ipcRenderer.invoke('save-quick-reply', quickReplyData);
-  renderQuickReplyList();
-};
+    quickReplyData.templates = quickReplyData.templates.filter(t => t.id !== templateId);
+    ipcRenderer.invoke('save-quick-reply', quickReplyData);
+    renderQuickReplyList();
+  };
 
 // 搜索过滤
 function filterTemplates() {
