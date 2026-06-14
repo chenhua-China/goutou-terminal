@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, clipboard, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, clipboard, shell, Menu } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -22,6 +22,7 @@ const userDataPath = app.getPath('userData');
 const SESSION_FILE = path.join(userDataPath, 'session.json');
 const TEMPLATES_FILE = path.join(userDataPath, 'templates.json');
 const QUICK_REPLY_FILE = path.join(userDataPath, 'quick-reply.json');
+const SETTINGS_FILE = path.join(userDataPath, 'settings.json');
 
 // 确保用户数据目录存在
 if (!fs.existsSync(userDataPath)) {
@@ -232,6 +233,20 @@ function createWindow() {
       }
     }, 100);
     
+    // 应用保存的透明度设置（延迟执行，避免阻塞窗口初始化）
+    if (appSettings.opacity !== undefined && appSettings.opacity < 1.0) {
+      setTimeout(() => {
+        try {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.setOpacity(appSettings.opacity);
+            console.log('[Main] 已应用透明度:', appSettings.opacity);
+          }
+        } catch (e) {
+          console.error('[Main] 设置透明度失败:', e.message);
+        }
+      }, 500);
+    }
+    
     console.log('[Main] 窗口已显示并尝试聚焦');
   });
 
@@ -360,6 +375,75 @@ function createWindow() {
   });
   
   console.log('[Main] 窗口已创建');
+  
+  setupMenu();
+}
+
+function applyOpacity(value) {
+  const v = Math.max(0.3, Math.min(1.0, value));
+  appSettings.opacity = v;
+  saveSettings(appSettings);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setOpacity(v);
+  }
+  setupMenu();
+}
+
+function setupMenu() {
+  const currentVal = appSettings.opacity !== undefined ? appSettings.opacity : 1.0;
+  
+  const opacityLevels = [
+    { label: '30%', value: 0.3 },
+    { label: '50%', value: 0.5 },
+    { label: '70%', value: 0.7 },
+    { label: '85%', value: 0.85 },
+    { label: '90%', value: 0.9 },
+    { label: '100%（不透明）', value: 1.0 },
+  ];
+  
+  const template = [
+    {
+      label: '文件',
+      submenu: [
+        { label: '新建终端', accelerator: 'Ctrl+T', click: () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('menu-new-terminal'); } },
+        { type: 'separator' },
+        { label: '退出', accelerator: 'Alt+F4', role: 'quit' },
+      ]
+    },
+    {
+      label: '编辑',
+      submenu: [
+        { label: '复制', accelerator: 'Ctrl+Shift+C', role: 'copy' },
+        { label: '粘贴', accelerator: 'Ctrl+Shift+V', role: 'paste' },
+        { label: '全选', accelerator: 'Ctrl+A', role: 'selectAll' },
+      ]
+    },
+    {
+      label: '视图',
+      submenu: [
+        {
+          label: '窗口透明度',
+          submenu: opacityLevels.map(item => ({
+            label: item.label,
+            type: 'radio',
+            checked: Math.abs(currentVal - item.value) < 0.01,
+            click: () => applyOpacity(item.value),
+          }))
+        },
+        { type: 'separator' },
+        { label: '放大', accelerator: 'Ctrl+=', role: 'zoomIn' },
+        { label: '缩小', accelerator: 'Ctrl+-', role: 'zoomOut' },
+        { label: '重置缩放', accelerator: 'Ctrl+0', role: 'resetZoom' },
+        { type: 'separator' },
+        { label: '全屏', accelerator: 'F11', role: 'togglefullscreen' },
+        { type: 'separator' },
+        { label: '开发者工具', accelerator: 'Ctrl+Shift+I', role: 'toggleDevTools' },
+      ]
+    },
+  ];
+  
+  const menu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(menu);
 }
 
 app.whenReady().then(() => {
@@ -413,6 +497,28 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[Main] 未处理的 Promise 拒绝:', reason);
 });
+
+// 设置管理
+function loadSettings() {
+  try {
+    if (fs.existsSync(SETTINGS_FILE)) {
+      return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf-8'));
+    }
+  } catch (e) {
+    console.error('[Main] 加载设置失败:', e.message);
+  }
+  return { opacity: 1.0 };
+}
+
+function saveSettings(settings) {
+  try {
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('[Main] 保存设置失败:', e.message);
+  }
+}
+
+const appSettings = loadSettings();
 
 // 自动查找 Git Bash（使用 usr/bin/bash.exe，避免与 WSL bash 混淆）
 function findGitBash() {
@@ -1258,4 +1364,32 @@ ipcMain.handle('edit-alias-dialog', async (event, { currentName, originalName })
     });
     inputWindow.on('closed', () => { resolve({ cancelled: true }); });
   });
+});
+
+// 透明度设置
+ipcMain.handle('get-opacity', () => {
+  return { opacity: appSettings.opacity !== undefined ? appSettings.opacity : 1.0 };
+});
+
+ipcMain.handle('set-opacity', (event, opacity) => {
+  try {
+    const value = Math.max(0.3, Math.min(1.0, opacity));
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setOpacity(value);
+    }
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('save-opacity', (event, opacity) => {
+  try {
+    const value = Math.max(0.3, Math.min(1.0, opacity));
+    appSettings.opacity = value;
+    saveSettings(appSettings);
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
 });

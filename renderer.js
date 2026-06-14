@@ -55,6 +55,7 @@ const emptyState = document.getElementById('emptyState');
 const newSessionBtn = document.getElementById('newSessionBtn');
 const cwdText = document.getElementById('cwdText');
 const cwdCopyBtn = document.getElementById('cwdCopyBtn');
+const opacityBtn = document.getElementById('opacityBtn');
 
 // 弹窗
 let modalOverlay;
@@ -63,6 +64,10 @@ let manageTemplateModal;
 
 // 拖拽相关
 let draggedItem = null;
+
+// 透明度设置
+let currentOpacity = 1.0;
+let opacityPanel = null;
 
 // 历史目录管理
 const CWD_HISTORY_KEY = 'cwdHistory';
@@ -196,6 +201,9 @@ async function init() {
       });
     }
   });
+
+  // 透明度设置
+  initOpacityControl();
 
   document.addEventListener('keydown', (e) => {
     if (e.ctrlKey && e.key === 't') {
@@ -1120,6 +1128,84 @@ function restoreFocusToTerminal() {
       forceTerminalFocus(term.terminal, wrapper);
     }
   }
+}
+
+// 透明度控制
+async function initOpacityControl() {
+  const result = await ipcRenderer.invoke('get-opacity');
+  currentOpacity = result.opacity !== undefined ? result.opacity : 1.0;
+
+  if (!opacityBtn) return;
+
+  opacityBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleOpacityPanel();
+  });
+}
+
+function toggleOpacityPanel() {
+  if (opacityPanel) {
+    closeOpacityPanel();
+    return;
+  }
+
+  opacityPanel = document.createElement('div');
+  opacityPanel.className = 'opacity-panel';
+
+  const percentValue = Math.round(currentOpacity * 100);
+
+  opacityPanel.innerHTML = `
+    <div class="opacity-panel-header">
+      <span>🌫️ 窗口透明度</span>
+      <span class="opacity-value" id="opacityValue">${percentValue}%</span>
+    </div>
+    <div class="opacity-slider-row">
+      <span class="opacity-label">30%</span>
+      <input type="range" class="opacity-slider" id="opacitySlider"
+        min="30" max="100" step="1" value="${percentValue}">
+      <span class="opacity-label">100%</span>
+    </div>
+  `;
+
+  document.body.appendChild(opacityPanel);
+
+  const btnRect = opacityBtn.getBoundingClientRect();
+  opacityPanel.style.top = (btnRect.bottom + 4) + 'px';
+  opacityPanel.style.right = (window.innerWidth - btnRect.right) + 'px';
+
+  const slider = opacityPanel.querySelector('#opacitySlider');
+  const valueDisplay = opacityPanel.querySelector('#opacityValue');
+
+  let saveTimer = null;
+
+  slider.addEventListener('input', () => {
+    const percent = parseInt(slider.value, 10);
+    currentOpacity = percent / 100;
+    valueDisplay.textContent = percent + '%';
+    ipcRenderer.invoke('set-opacity', currentOpacity);
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      ipcRenderer.invoke('save-opacity', currentOpacity);
+    }, 300);
+  });
+
+  setTimeout(() => {
+    document.addEventListener('click', closeOpacityPanelOnOutsideClick);
+  }, 0);
+}
+
+function closeOpacityPanelOnOutsideClick(e) {
+  if (opacityPanel && !opacityPanel.contains(e.target) && e.target !== opacityBtn) {
+    closeOpacityPanel();
+  }
+}
+
+function closeOpacityPanel() {
+  if (opacityPanel) {
+    opacityPanel.remove();
+    opacityPanel = null;
+  }
+  document.removeEventListener('click', closeOpacityPanelOnOutsideClick);
 }
 
 // 通用弹窗输入框聚焦助手（解决 Electron 焦点问题）
