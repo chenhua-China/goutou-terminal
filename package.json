@@ -1,6 +1,6 @@
 {
   "name": "goutou-terminal",
-  "version": "1.1.3",
+  "version": "1.1.4",
   "description": "🐕 Goutou Terminal - A powerful terminal manager with aliases, templates, and auto-restore",
   "main": "main.js",
   "repository": {

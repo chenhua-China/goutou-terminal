@@ -15,10 +15,13 @@ function debounce(fn, delay) {
 // 剪贴板辅助函数：优先使用系统 clipboard，无权限时降级到 IPC
 async function clipboardWrite(text) {
   try {
+    console.log('[Renderer][DEBUG] clipboardWrite: 尝试 navigator.clipboard.writeText');
     await navigator.clipboard.writeText(text);
-  } catch (_) {
-    // 无权限或失败时，使用 Electron IPC
+    console.log('[Renderer][DEBUG] clipboardWrite: navigator.clipboard.writeText 成功');
+  } catch (e) {
+    console.log('[Renderer][DEBUG] clipboardWrite: navigator.clipboard.writeText 失败, 降级到 IPC, 错误:', e.message || e);
     await ipcRenderer.invoke('clipboard-write', text);
+    console.log('[Renderer][DEBUG] clipboardWrite: IPC clipboard-write 成功');
   }
 }
 
@@ -214,13 +217,11 @@ async function init() {
       e.preventDefault();
       if (activeTerminalId) closeTerminal(activeTerminalId);
     }
-    // Ctrl+Shift+S 保存会话
-    if (e.ctrlKey && e.shiftKey && e.key === 's') {
+    if (e.ctrlKey && e.shiftKey && e.key === 'S') {
       e.preventDefault();
       saveCurrentSession();
       alert('✅ 会话已保存!');
     }
-    // F5 刷新当前终端的输入状态
     if (e.key === 'F5' && activeTerminalId) {
       e.preventDefault();
       const term = terminals.get(activeTerminalId);
@@ -228,7 +229,6 @@ async function init() {
         term.terminal.blur();
         setTimeout(() => {
           term.terminal.focus();
-          console.log('[Renderer] F5 刷新终端输入状态');
         }, 50);
       }
     }
@@ -238,7 +238,6 @@ async function init() {
     const term = terminals.get(id);
     if (!term) return;
 
-    // 缓冲写入:合并短时间内的多次数据,减少渲染压力
     if (!term._writeBuffer) {
       term._writeBuffer = '';
       term._writeTimer = null;
@@ -246,26 +245,28 @@ async function init() {
 
     term._writeBuffer += data;
 
-    // 清除之前的定时器
     if (term._writeTimer) clearTimeout(term._writeTimer);
 
-    // 立即写入(保持响应速度)
     if (term._writeBuffer.length > 0) {
       term.terminal.write(term._writeBuffer);
       term._writeBuffer = '';
     }
-
-    // 优化：移除每次输出后的 fit() 调用，只在窗口 resize 时 fit
-    // 原来的代码每次输出后都 fit()，导致 CPU 占用极高
   });
 
   ipcRenderer.on('terminal-exit', (event, { id, exitCode }) => {
     const term = terminals.get(id);
     if (term) {
-      term.terminal.writeln(`\r\n\x1b[31m[进程已退出,代码:${exitCode}]\x1b[0m`);
+      if (!term._reloading) {
+        term.terminal.writeln(`\r\n\x1b[31m[进程已退出,代码:${exitCode}]\x1b[0m`);
+      }
     }
     // 终端退出时自动保存会话
     saveCurrentSession();
+  });
+
+  ipcRenderer.on('menu-reload-all', () => {
+    console.log('[Renderer] 收到菜单: 重新加载全部会话');
+    reloadAllTerminals();
   });
 
   // 监听窗口关闭事件
@@ -1493,6 +1494,29 @@ async function openTerminal(preset) {
     ipcRenderer.invoke('write-terminal', { id: ptyId, data });
   });
 
+  // 拦截原生 copy 事件（来自 Electron 菜单 role:copy 或 Ctrl+Shift+C 菜单快捷键）
+  // 覆盖 xterm 内置的 copyHandler（使用 e.clipboardData.setData），
+  // 改用 clipboardWrite 降级路径，确保无 PowerShell 权限时仍能复制
+  wrapper.addEventListener('copy', (e) => {
+    const selection = terminal.getSelection();
+    console.log('[Renderer][DEBUG] copy 事件触发, 有选中:', !!selection, selection ? `长度=${selection.length}` : '');
+    if (selection) {
+      e.preventDefault();
+      e.stopPropagation();
+      console.log('[Renderer][DEBUG] copy 事件: 已拦截, 走 clipboardWrite 降级路径');
+      clipboardWrite(selection).then(() => {
+        console.log('[Renderer][DEBUG] clipboardWrite 成功');
+      }).catch(err => {
+        console.error('[Renderer][DEBUG] clipboardWrite 失败:', err);
+        ipcRenderer.invoke('clipboard-write', selection).then(() => {
+          console.log('[Renderer][DEBUG] IPC clipboard-write 兜底成功');
+        }).catch(err2 => {
+          console.error('[Renderer][DEBUG] IPC clipboard-write 兜底也失败:', err2);
+        });
+      });
+    }
+  }, true);
+
   // 添加右键菜单
   // 1. 在 mousedown 捕获阶段提前获取并复制选中文本
   let cachedSelection = '';
@@ -2134,6 +2158,27 @@ function showSessionContextMenu(e, id) {
   });
   menu.appendChild(copyPathItem);
 
+  // 重新加载终端选项
+  const reloadItem = document.createElement('div');
+  reloadItem.textContent = '🔄 重新加载';
+  reloadItem.style.cssText = `
+    padding: 8px 16px;
+    cursor: pointer;
+    color: #cccccc;
+    font-size: 13px;
+  `;
+  reloadItem.addEventListener('mouseenter', () => {
+    reloadItem.style.background = '#0e639c';
+  });
+  reloadItem.addEventListener('mouseleave', () => {
+    reloadItem.style.background = 'transparent';
+  });
+  reloadItem.addEventListener('click', () => {
+    menu.remove();
+    reloadTerminal(id);
+  });
+  menu.appendChild(reloadItem);
+
   // 关闭终端选项
   const closeItem = document.createElement('div');
   closeItem.textContent = '🗑️ 关闭终端';
@@ -2417,6 +2462,66 @@ async function closeTerminal(id) {
   
   // 更新状态显示
   updateHealthStatus();
+}
+
+async function reloadTerminal(id) {
+  const term = terminals.get(id);
+  if (!term) return;
+
+  const preset = { ...term.preset };
+  const currentPtyId = term.ptyId;
+
+  console.log('[Renderer] 重新加载终端 (仅重启PTY):', id, 'preset:', preset);
+
+  term._reloading = true;
+
+  await ipcRenderer.invoke('close-terminal', { id: currentPtyId });
+
+  await new Promise(r => setTimeout(r, 300));
+
+  term.terminal.clear();
+  term.terminal.writeln('\x1b[33m⟳ 正在重新加载...\x1b[0m');
+
+  const dims = term.fitAddon.proposeDimensions();
+  const result = await ipcRenderer.invoke('create-terminal', {
+    id: currentPtyId,
+    cwd: preset.cwd,
+    shell: preset.shell,
+    script: preset.script || '',
+    cols: dims?.cols || 80,
+    rows: dims?.rows || 24,
+    name: term.name,
+    icon: preset.icon,
+    restore: false,
+  });
+
+  if (result.success) {
+    term.terminal.writeln(`\x1b[32m✓ 终端已重新加载:${term.name}\x1b[0m`);
+    if (preset.script) {
+      term.terminal.writeln(`\x1b[90m执行脚本:${preset.script}\x1b[0m`);
+      term.terminal.writeln('');
+    }
+  } else {
+    term.terminal.writeln(`\x1b[31m重新加载失败:${result.error}\x1b[0m`);
+  }
+
+  term._reloading = false;
+  console.log('[Renderer] 终端重新加载完成:', id);
+}
+
+async function reloadAllTerminals() {
+  if (terminals.size === 0) return;
+
+  if (!confirm(`确定要重新加载全部 ${terminals.size} 个会话吗？\n所有控制台将被重启，会话列表不变。`)) return;
+
+  const ids = Array.from(terminals.keys());
+  console.log('[Renderer] 重新加载全部会话, 数量:', ids.length);
+
+  for (const id of ids) {
+    await reloadTerminal(id);
+  }
+
+  console.log('[Renderer] 全部会话重新加载完成');
 }
 
 // 启动监控

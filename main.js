@@ -6,6 +6,37 @@ const fs = require('fs');
 let mainWindow;
 const terminals = new Map();
 
+function killTerminalProcess(pid) {
+  if (!pid) return;
+  const { execSync } = require('child_process');
+
+  try {
+    const output = execSync(
+      `wmic process where "ProcessId=${pid}" get ParentProcessId /value 2>nul`,
+      { encoding: 'utf8', timeout: 3000 }
+    );
+    const match = output.match(/ParentProcessId=(\d+)/);
+    if (match) {
+      const parentPid = parseInt(match[1]);
+      if (parentPid && parentPid > 4) {
+        const parentOut = execSync(
+          `wmic process where "ProcessId=${parentPid}" get Name /value 2>nul`,
+          { encoding: 'utf8', timeout: 3000 }
+        );
+        if (parentOut.toLowerCase().includes('conhost')) {
+          execSync(`taskkill /F /PID ${parentPid} /T 2>nul`, { timeout: 5000 });
+          console.log(`[Main] 已杀 conhost 父进程 PID ${parentPid}`);
+        }
+      }
+    }
+  } catch (_) {}
+
+  try {
+    execSync(`taskkill /F /PID ${pid} /T 2>nul`, { timeout: 5000 });
+    console.log(`[Main] 已杀进程树 PID ${pid}`);
+  } catch (_) {}
+}
+
 // 终端数量限制（最多10个）
 const MAX_TERMINALS = 10;
 
@@ -287,30 +318,17 @@ function createWindow() {
   function cleanupAllTerminals() {
     console.log('[Main] 清理所有终端进程，数量:', terminals.size);
     
-    // 先收集所有 PID（clear 后就没了）
     const pids = [];
     terminals.forEach((ptyProcess, id) => {
       if (ptyProcess.pid) pids.push(ptyProcess.pid);
     });
     
-    // Windows 上先用 taskkill 强制杀掉进程树（在 ptyProcess.kill 之前，否则 PID 没了）
     if (process.platform === 'win32' && pids.length > 0) {
-      try {
-        const { execSync } = require('child_process');
-        for (const pid of pids) {
-          try {
-            execSync(`taskkill /F /PID ${pid} /T 2>nul`, { timeout: 3000 });
-            console.log(`[Main] taskkill 已清理进程树 PID ${pid}`);
-          } catch (_) {
-            // 进程已不存在，忽略
-          }
-        }
-      } catch (e) {
-        console.error('[Main] taskkill 清理失败:', e.message);
+      for (const pid of pids) {
+        killTerminalProcess(pid);
       }
     }
     
-    // 再调用 ptyProcess.kill() 作为兜底
     terminals.forEach((ptyProcess) => {
       try {
         if (!ptyProcess.killed) {
@@ -406,6 +424,7 @@ function setupMenu() {
       label: '文件',
       submenu: [
         { label: '新建终端', accelerator: 'Ctrl+T', click: () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('menu-new-terminal'); } },
+        { label: '重新加载全部会话', click: () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('menu-reload-all'); } },
         { type: 'separator' },
         { label: '退出', accelerator: 'Alt+F4', role: 'quit' },
       ]
@@ -469,6 +488,11 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
   console.log('[Main] before-quit，清理所有终端');
   stopProcessMonitor();
+  if (process.platform === 'win32') {
+    terminals.forEach((ptyProcess) => {
+      if (ptyProcess.pid) killTerminalProcess(ptyProcess.pid);
+    });
+  }
   terminals.forEach((ptyProcess) => {
     try { ptyProcess.kill(); } catch (e) {}
   });
@@ -476,11 +500,14 @@ app.on('before-quit', () => {
 });
 
 app.on('window-all-closed', () => {
-  // 停止进程监控
   stopProcessMonitor();
   console.log('[Main] 进程监控已停止');
   
-  // 清理残留终端
+  if (process.platform === 'win32') {
+    terminals.forEach((ptyProcess) => {
+      if (ptyProcess.pid) killTerminalProcess(ptyProcess.pid);
+    });
+  }
   terminals.forEach((ptyProcess) => {
     try { ptyProcess.kill(); } catch (e) {}
   });
@@ -892,10 +919,10 @@ ipcMain.handle('create-terminal', async (event, options) => {
     });
 
     ptyProcess.onExit(({ exitCode, signal }) => {
-      terminals.delete(id);
-      
-      // 退出时更新会话
-      saveSession();
+      if (terminals.get(id) === ptyProcess) {
+        terminals.delete(id);
+        saveSession();
+      }
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('terminal-exit', { id, exitCode, signal });
       }
@@ -956,6 +983,9 @@ ipcMain.handle('close-terminal', (event, { id, forceKill = false }) => {
   if (ptyProcess) {
     try {
       ptyProcess.userClosed = true;
+      if (process.platform === 'win32' && ptyProcess.pid) {
+        killTerminalProcess(ptyProcess.pid);
+      }
       ptyProcess.kill();
       terminals.delete(id);
       saveSession();
